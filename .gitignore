@@ -1,0 +1,8 @@
+*.log
+logs/
+captures/
+.env
+__pycache__/
+*.pyc
+overlay_layout.json
+.pytest_cache/
