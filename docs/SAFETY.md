@@ -1,6 +1,6 @@
 # Safety
 
-Rift Coach is designed as a read-only, local-first companion.
+Macro Goblin is designed as a read-only, local-first companion.
 
 ## Data sources
 
@@ -19,7 +19,7 @@ Rift Coach is designed as a read-only, local-first companion.
 
 ## What the app does not do
 
-Rift Coach does not:
+Macro Goblin does not:
 
 - read or scan game process memory
 - inject into the League client

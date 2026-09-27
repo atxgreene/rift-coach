@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Rift Coach - a live, voice-first League of Legends coaching companion.
+Macro Goblin - a live, voice-first League of Legends macro companion.
 
 Data source (read-only, Riot-sanctioned, localhost only):
   https://127.0.0.1:2999/liveclientdata/allgamedata
@@ -1215,7 +1215,7 @@ def run_loop(args, speaker, coach, client, capture, stop):
     last_tick_error = None
     delay = 0.05 if (args.demo or args.replay) else CONFIG["poll_seconds"]
     live = not (args.demo or args.replay)
-    print("Rift Coach running. Ctrl+C to quit.", flush=True)
+    print("Macro Goblin running. Ctrl+C to quit.", flush=True)
     if speaker.mode == "win":
         print("Voice: Microsoft Zira. Hide overlay: Ctrl+Shift+O. League must be Borderless.", flush=True)
     else:
@@ -1320,7 +1320,7 @@ def doctor_check():
     add("Claude / LLM", True, "not required; only used with --claude and ANTHROPIC_API_KEY")
     add("Safety posture", True, "read-only local Riot API; no memory reads, hooks, injection, or packet sniffing")
 
-    print("Rift Coach doctor")
+    print("Macro Goblin doctor")
     hard_fail = False
     for name, ok, detail in rows:
         mark = "OK" if ok else "WARN"
@@ -1335,7 +1335,7 @@ def doctor_check():
 
 
 def build_arg_parser():
-    parser = argparse.ArgumentParser(description="Rift Coach - live League coaching companion")
+    parser = argparse.ArgumentParser(description="Macro Goblin - local League macro companion")
     parser.add_argument("--doctor", action="store_true", help="run setup checks and exit")
     parser.add_argument("--demo", action="store_true", help="run a simulated game")
     parser.add_argument("--speed", type=float, default=10, help="demo/replay speed multiplier")

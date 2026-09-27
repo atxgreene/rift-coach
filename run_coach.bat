@@ -1,5 +1,5 @@
 @echo off
-title Rift Coach
+title Macro Goblin
 cd /d "%~dp0"
 python --version >nul 2>&1
 if errorlevel 1 (
@@ -8,7 +8,7 @@ if errorlevel 1 (
   exit /b 1
 )
 echo.
-echo  Rift Coach
+echo  Macro Goblin
 echo  League must be Borderless, not exclusive Fullscreen.
 echo  Hide the overlay with Ctrl+Shift+O.
 echo  This launch records the match locally. Nothing is uploaded.

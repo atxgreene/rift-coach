@@ -9,7 +9,7 @@ PAGE = """<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Rift Coach</title>
+<title>Macro Goblin</title>
 <style>
   body { margin: 0; background: #0e1116; color: #e7e5e4; font: 15px Segoe UI, sans-serif; }
   main { max-width: 420px; margin: 24px auto; background: #141820; padding: 16px 18px; }
@@ -30,7 +30,7 @@ PAGE = """<!DOCTYPE html>
 </head>
 <body>
 <main>
-  <h1>RIFT COACH</h1>
+  <h1>MACRO GOBLIN</h1>
   <div class="clock" id="clock">READY</div>
   <p class="muted" id="who">Queue up</p>
   <table id="timers"></table>

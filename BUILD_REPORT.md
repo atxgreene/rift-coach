@@ -1,6 +1,4 @@
-# Build report
-
-Rift Coach is currently packaged as a local, stdlib-only Python app.
+# Macro Goblin is currently packaged as a local, stdlib-only Python app.
 
 ## Current launch surface
 

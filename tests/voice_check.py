@@ -9,7 +9,7 @@ from lol_coach import Speaker
 
 speaker = Speaker(voice=True)
 print("mode", speaker.mode)
-speaker.say("Rift Coach voice check. If you can hear this, voice is working.")
+speaker.say("Macro Goblin voice check. If you can hear this, voice is working.")
 time.sleep(4)
 alive = speaker.proc is not None and speaker.proc.poll() is None
 print("VOICE_PROC", "alive" if alive else "dead")

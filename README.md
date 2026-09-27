@@ -1,12 +1,22 @@
-# Rift Coach
+# Macro Goblin
 
-Rift Coach is a local, read-only League of Legends coaching companion. It speaks and displays lightweight reminders for objective timers, item adaptation, CS pace, deaths, and simple macro patterns.
+<p align="center">
+  <img src="assets/macro-goblin-icon.png" alt="Macro Goblin icon" width="180">
+</p>
+
+<p align="center"><strong>Tiny goblin. Big macro.</strong></p>
+
+Macro Goblin is a local, read-only League of Legends macro companion. It speaks and displays lightweight reminders for objective timers, item adaptation, CS pace, deaths, and simple pattern reads.
 
 It does **not** need an LLM to run. The default mode is deterministic Python logic.
 
+## What it feels like
+
+A sharp duo partner on your second monitor: quick timers, one useful focus line, clear item plan, and no fake confidence. Funny name, serious safety posture.
+
 ## Safety posture
 
-Rift Coach uses Riot's local Live Client Data API and Riot Data Dragon only.
+Macro Goblin uses Riot's local Live Client Data API and Riot Data Dragon only.
 
 It does **not**:
 
@@ -18,7 +28,7 @@ It does **not**:
 - install low-level keyboard hooks
 - upload match data
 
-The overlay hotkey uses Windows `RegisterHotKey`, and the local dashboard binds to `127.0.0.1` only.
+The overlay hotkeys use Windows `RegisterHotKey`, and the local dashboard binds to `127.0.0.1` only.
 
 See [`docs/SAFETY.md`](docs/SAFETY.md) for details.
 
@@ -118,6 +128,10 @@ Optional manual checks:
 python tests\smoke_overlay.py
 python tests\voice_check.py
 ```
+
+## Brand
+
+See [`docs/BRAND.md`](docs/BRAND.md).
 
 ## Troubleshooting
 

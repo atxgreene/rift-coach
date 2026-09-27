@@ -1,4 +1,4 @@
-"""Click-through overlay for Rift Coach.
+"""Click-through overlay for Macro Goblin.
 
 Separate OS window. No DirectX hook, no injection, no keyboard hook, no memory read.
 Mouse clicks pass through via WS_EX_TRANSPARENT during play. Show/hide and move-mode
@@ -216,7 +216,7 @@ def run(bus, stop, edit=False):
     fade = CONFIG["overlay"].get("callout_fade_seconds", 12)
 
     root = tk.Tk()
-    root.title("Rift Coach")
+    root.title("Macro Goblin")
     root.overrideredirect(True)
     root.attributes("-topmost", True)
     root.geometry("%dx%d+%d+%d" % (width, height, layout["x"], layout["y"]))
@@ -240,6 +240,17 @@ def run(bus, stop, edit=False):
     mono_font = tkfont.Font(family="Consolas", size=max(10, int(14 * scale)), weight="bold")
     small_mono = tkfont.Font(family="Consolas", size=max(8, int(10 * scale)))
 
+    image_refs = []
+    app_icon = None
+    icon_path = os.path.join(ROOT, "assets", "macro-goblin-icon.png")
+    if os.path.exists(icon_path):
+        try:
+            app_icon = tk.PhotoImage(file=icon_path)
+            root.iconphoto(True, app_icon)
+            image_refs.append(app_icon)
+        except tk.TclError:
+            app_icon = None
+
     shell = tk.Frame(root, bg=BG, highlightbackground=GOLD, highlightthickness=1)
     shell.pack(fill="both", expand=True)
     tk.Frame(shell, bg=GOLD, height=2).pack(fill="x")
@@ -253,7 +264,14 @@ def run(bus, stop, edit=False):
 
     header = tk.Frame(panel, bg=BG)
     header.pack(fill="x")
-    tk.Label(header, text="RIFT COACH", bg=BG, fg=GOLD_BRIGHT, font=title_font, anchor="w").pack(side="left")
+    if app_icon is not None:
+        try:
+            header_icon = app_icon.subsample(32, 32)
+            image_refs.append(header_icon)
+            tk.Label(header, image=header_icon, bg=BG).pack(side="left", padx=(0, 6))
+        except tk.TclError:
+            pass
+    tk.Label(header, text="MACRO GOBLIN", bg=BG, fg=GOLD_BRIGHT, font=title_font, anchor="w").pack(side="left")
     mode_label = tk.Label(header, text="MOVE" if edit else "LIVE", bg=BG, fg=SOON if edit else BLUE, font=tiny_font, anchor="e")
     mode_label.pack(side="right")
 
