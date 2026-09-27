@@ -5,6 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Macro Goblin — Tiny goblin. Big macro.</title>
   <meta name="description" content="Macro Goblin is a local, read-only League macro companion for objective timers, item adaptation, CS pace, deaths, and simple pattern reads.">
+  <link rel="icon" href="assets/favicon-mark.png">
+  <meta property="og:title" content="Macro Goblin — Tiny goblin. Big macro.">
+  <meta property="og:description" content="A local, read-only League macro companion for timers, item plans, CS pace, deaths, and simple pattern reads.">
+  <meta property="og:image" content="https://atxgreene.github.io/rift-coach/assets/readme-hero.png">
   <style>
     :root {
       --bg: #05080d;
@@ -27,6 +31,8 @@
     body {
       margin: 0;
       background:
+        linear-gradient(rgba(5,8,13,.84), rgba(5,8,13,.96)),
+        url('assets/brand-bg-texture.png') center top / cover fixed,
         radial-gradient(circle at 25% 12%, rgba(63,183,216,.18), transparent 34rem),
         radial-gradient(circle at 78% 0%, rgba(200,170,110,.16), transparent 28rem),
         linear-gradient(180deg, #060a11 0%, #05080d 58%, #030508 100%);
@@ -53,6 +59,13 @@
     .hero-card { position: relative; background: linear-gradient(180deg, rgba(17,31,50,.94), rgba(8,17,29,.94)); border: 1px solid rgba(200,170,110,.42); border-radius: 28px; box-shadow: var(--shadow); padding: 24px; overflow: hidden; }
     .hero-card::before { content: ""; position: absolute; inset: -1px; background: radial-gradient(circle at 50% 10%, rgba(63,183,216,.22), transparent 20rem); pointer-events: none; }
     .logo-big { display: block; width: min(310px, 76%); margin: 12px auto 26px; border-radius: 32px; position: relative; z-index: 1; }
+    .mockup-img { display: block; width: 100%; border-radius: 18px; border: 1px solid rgba(200,170,110,.35); box-shadow: 0 24px 60px rgba(0,0,0,.35); margin-top: 18px; }
+    .banner-strip { margin-top: 18px; border-radius: 24px; border: 1px solid rgba(200,170,110,.28); overflow: hidden; box-shadow: var(--shadow); background: #070b12; }
+    .banner-strip img { display: block; width: 100%; }
+    .asset-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 18px; }
+    .asset-tile { background: rgba(13,24,40,.72); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
+    .asset-tile img { width: 100%; aspect-ratio: 16 / 10; object-fit: cover; display: block; }
+    .asset-tile span { display: block; padding: 10px 12px; color: var(--muted); font-size: 13px; }
     .hud { position: relative; z-index: 1; display: grid; gap: 10px; }
     .hud-row { display: flex; justify-content: space-between; align-items: center; background: rgba(5,8,13,.72); border: 1px solid rgba(35,57,87,.9); border-radius: 14px; padding: 12px 14px; }
     .hud-label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .14em; }
@@ -70,7 +83,7 @@
     footer { border-top: 1px solid rgba(35,57,87,.75); margin-top: 48px; padding: 24px 0 38px; color: var(--muted); font-size: 14px; }
     @media (max-width: 860px) {
       .hero, .asset-board { grid-template-columns: 1fr; }
-      .grid { grid-template-columns: 1fr; }
+      .grid, .asset-grid { grid-template-columns: 1fr; }
       .nav-links { display: none; }
       .hero { padding-top: 32px; }
     }
@@ -101,13 +114,18 @@
         </div>
       </div>
       <div class="hero-card" aria-label="Macro Goblin preview card">
-        <img class="logo-big" src="assets/macro-goblin-icon.png" alt="Macro Goblin mascot">
+        <img class="logo-big" src="assets/mascot-transparent.png" alt="Macro Goblin mascot">
         <div class="hud">
           <div class="hud-row"><span class="hud-label">Focus</span><span class="hud-value">Dragon in 0:30</span></div>
           <div class="hud-row"><span class="hud-label">Item plan</span><span class="hud-value">Last Whisper → LDR</span></div>
           <div class="hud-row"><span class="hud-label">Lane state</span><span class="hud-value">CS 6.8 / 8</span></div>
         </div>
+        <img class="mockup-img" src="assets/overlay-mockup.png" alt="Macro Goblin overlay mockup">
       </div>
+    </section>
+
+    <section class="wrap">
+      <div class="banner-strip"><img src="assets/social-banner.png" alt="Macro Goblin cinematic brand banner"></div>
     </section>
 
     <section class="wrap section">
@@ -136,8 +154,13 @@
         <p>Upload generated assets and this page can graduate from prototype to launch-quality. Prioritize expressive but clean goblin imagery and a few actual product screenshots.</p>
       </div>
       <div class="upload-slot">
-        <strong>Needed next:</strong><br>
-        hero mascot transparent PNG, wide social banner, overlay screenshot/mockup, favicon/app icon set, and one clean README hero image.
+        <strong>Generated and wired:</strong><br>
+        mascot hero, social banner, overlay mockup, README hero, favicon mark, and background texture.
+        <div class="asset-grid">
+          <div class="asset-tile"><img src="assets/readme-hero.png" alt="README hero asset"><span>README hero</span></div>
+          <div class="asset-tile"><img src="assets/favicon-mark.png" alt="favicon mark"><span>Favicon mark</span></div>
+          <div class="asset-tile"><img src="assets/macro-goblin-logo.png" alt="Brand card"><span>Brand card</span></div>
+        </div>
       </div>
     </section>
   </main>

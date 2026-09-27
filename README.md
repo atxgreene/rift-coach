@@ -1,7 +1,7 @@
 # Macro Goblin
 
 <p align="center">
-  <img src="assets/macro-goblin-icon.png" alt="Macro Goblin icon" width="180">
+  <img src="assets/readme-hero.png" alt="Macro Goblin hero" width="900">
 </p>
 
 <p align="center"><strong>Tiny goblin. Big macro.</strong></p>
@@ -131,7 +131,7 @@ python tests\voice_check.py
 
 ## Brand
 
-See [`docs/BRAND.md`](docs/BRAND.md).
+See [`docs/BRAND.md`](docs/BRAND.md). Generated assets live in `assets/` and are mirrored under `docs/assets/` for GitHub Pages.
 
 ## Troubleshooting
 
