@@ -76,6 +76,7 @@ python lol_coach.py --me YourSummonerName
 `--web` binds to `127.0.0.1:8765` only. It does not listen on the LAN.
 
 Show/hide overlay: `Ctrl+Shift+O`.
+Move/save overlay while running: `Ctrl+Shift+M`, drag the card, then press `Ctrl+Shift+M` again to return to click-through live mode.
 
 ## Optional LLM mode
 

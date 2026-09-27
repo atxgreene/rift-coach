@@ -75,8 +75,8 @@ CONFIG = {
         "hotkey": "ctrl+shift+o",
         "callout_fade_seconds": 12,
         "layouts": {
-            "1080p": {"x": 1936, "y": -95, "w": 280, "scale": 1.0, "opacity": 0.94},
-            "1440p": {"x": 20, "y": 240, "w": 268, "scale": 1.15, "opacity": 0.94},
+            "1080p": {"x": 1936, "y": -95, "w": 320, "scale": 1.0, "opacity": 0.94},
+            "1440p": {"x": 20, "y": 180, "w": 320, "scale": 1.15, "opacity": 0.94},
         },
     },
 }

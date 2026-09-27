@@ -24,6 +24,7 @@ python lol_coach.py --overlay-edit
 ```
 
 - Hide/show hotkey: `Ctrl+Shift+O`.
+- Move/save hotkey: `Ctrl+Shift+M`, drag the card, then press `Ctrl+Shift+M` again to return to click-through live mode.
 - If using multiple monitors, the saved position is local in `overlay_layout.json`. Delete that file to reset layout.
 
 ## No voice
