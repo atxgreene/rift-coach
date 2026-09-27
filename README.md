@@ -1,17 +1,68 @@
 # Rift Coach
 
-Live voice coach for League of Legends. Read-only. Uses Riot's local Live Client Data API and Data Dragon. No memory reads, no injection, no keyboard hooks.
+Rift Coach is a local, read-only League of Legends coaching companion. It speaks and displays lightweight reminders for objective timers, item adaptation, CS pace, deaths, and simple macro patterns.
 
-Project path: `C:\Users\austi\Projects\rift-coach`
+It does **not** need an LLM to run. The default mode is deterministic Python logic.
 
-## Run
+## Safety posture
 
-Double-click `run_coach.bat` before you queue. That starts voice plus the overlay.
+Rift Coach uses Riot's local Live Client Data API and Riot Data Dragon only.
 
-League must be **Borderless**, not exclusive Fullscreen, or Windows cannot draw the overlay on top.
+It does **not**:
 
-```text
-python lol_coach.py --demo --speed 20
+- read League process memory
+- inject DLLs
+- hook DirectX
+- sniff packets
+- automate mouse/keyboard input
+- install low-level keyboard hooks
+- upload match data
+
+The overlay hotkey uses Windows `RegisterHotKey`, and the local dashboard binds to `127.0.0.1` only.
+
+See [`docs/SAFETY.md`](docs/SAFETY.md) for details.
+
+## Requirements
+
+- Windows recommended for the overlay and built-in voice path
+- Python 3.9+
+- League of Legends in **Borderless** mode for the overlay
+- Internet access for Riot Data Dragon item/champion metadata
+
+No required pip packages are currently needed; the runtime is stdlib-only.
+
+## Quick start
+
+Before queueing, run the doctor:
+
+```bat
+python lol_coach.py --doctor
+```
+
+Then test the deterministic demo without voice:
+
+```bat
+python lol_coach.py --demo --speed 20 --no-voice
+```
+
+To run for a real game:
+
+```bat
+run_coach.bat
+```
+
+or manually:
+
+```bat
+python lol_coach.py --overlay --capture --log
+```
+
+Start it before you queue. It will wait until the League Live Client endpoint appears in-game.
+
+## Common commands
+
+```bat
+python lol_coach.py --doctor
 python lol_coach.py --demo --speed 20 --no-voice
 python lol_coach.py --overlay
 python lol_coach.py --overlay-edit
@@ -19,27 +70,54 @@ python lol_coach.py --capture
 python lol_coach.py --replay captures\<timestamp> --speed 20 --no-voice
 python lol_coach.py --web
 python lol_coach.py --log
-python lol_coach.py --me YourName
+python lol_coach.py --me YourSummonerName
 ```
 
-`--web` binds to `127.0.0.1:8765` only. It will not listen on the LAN.
+`--web` binds to `127.0.0.1:8765` only. It does not listen on the LAN.
 
 Show/hide overlay: `Ctrl+Shift+O`.
 
-## What it will not do
+## Optional LLM mode
 
-- Read game memory, inject a DLL, hook DirectX, or sniff packets.
-- Install a low-level keyboard hook. The hotkey is `RegisterHotKey`.
-- Show information you cannot already see on the scoreboard, events, or the screen.
-- Turn Claude mode on unless you pass `--claude`. Set `ANTHROPIC_API_KEY` yourself. It is never written into the script, the bat, or git.
+Claude mode is optional and off by default.
 
-## Verify
+```bat
+setx ANTHROPIC_API_KEY your_key_here
+python lol_coach.py --claude
+```
 
-```text
+If `--claude` is not passed, no LLM/API call is made.
+
+## Generated local files
+
+These are ignored by git:
+
+- `captures/` raw local snapshots for replay/debugging
+- `logs/` callout logs
+- `reports/` match notes
+- `overlay_layout.json` local overlay position
+- `__pycache__/`, `*.pyc`
+- `.env`
+
+Do not commit personal captures/logs/reports when sharing the repo.
+
+## Verification
+
+```bat
+python tests\test_shop.py
+python tests\test_patterns.py
 python tests\test_coach.py
-python tests\smoke_overlay.py
-python tests\voice_check.py
+python lol_coach.py --doctor
 python lol_coach.py --demo --speed 40 --no-voice
 ```
 
-First real match: start with `--capture`, play the game, then diff `captures\<timestamp>` against `SCHEMA_NOTES.md`.
+Optional manual checks:
+
+```bat
+python tests\smoke_overlay.py
+python tests\voice_check.py
+```
+
+## Troubleshooting
+
+See [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md).

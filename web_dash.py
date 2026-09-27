@@ -31,7 +31,8 @@ PAGE = """<!DOCTYPE html>
 <body>
 <main>
   <h1>RIFT COACH</h1>
-  <div class="clock" id="clock">waiting</div>
+  <div class="clock" id="clock">READY</div>
+  <p class="muted" id="who">Queue up</p>
   <table id="timers"></table>
   <p class="muted" id="gold">Item gold</p>
   <div class="bar"><div class="fill" id="fill"></div></div>
@@ -44,10 +45,19 @@ function fmt(s) {
   s = Math.max(0, Math.floor(s));
   return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
 }
+function esc(s) {
+  return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
 async function tick() {
   const res = await fetch("/state", {cache: "no-store"});
   const state = await res.json();
-  document.getElementById("clock").textContent = state.clock || "waiting";
+  document.getElementById("clock").textContent = state.clock || "READY";
+  const who = document.getElementById("who");
+  if (state.in_game) {
+    who.textContent = [state.champion, state.position, state.kda].filter(Boolean).join("  ");
+  } else {
+    who.textContent = state.hint || "Queue up. Borderless.";
+  }
   const names = {dragon: state.elder ? "Elder" : "Dragon", grubs: "Grubs", herald: "Herald", baron: "Baron"};
   const rows = Object.keys(names).map(key => {
     const at = (state.spawns || {})[key];
@@ -61,7 +71,9 @@ async function tick() {
   const diff = state.gold_diff || 0;
   const prev = state.prev_gold_diff || diff;
   const arrow = diff > prev + 200 ? "^" : (diff < prev - 200 ? "v" : "-");
-  document.getElementById("gold").textContent = "Item gold " + (diff >= 0 ? "+" : "-") + Math.abs(diff / 1000).toFixed(1) + "k " + arrow;
+  document.getElementById("gold").textContent = state.in_game
+    ? ("Item gold " + (diff >= 0 ? "+" : "-") + Math.abs(diff / 1000).toFixed(1) + "k " + arrow)
+    : "";
   const fill = document.getElementById("fill");
   const span = Math.max(-1, Math.min(1, diff / 5000)) * 50;
   fill.style.background = diff >= 0 ? "#7dcea0" : "#e07a7a";
@@ -75,9 +87,8 @@ async function tick() {
     cs.textContent = "CS " + rate.toFixed(1) + " / " + target;
     cs.className = rate >= target - 0.3 ? "up" : (rate >= target - 1.5 ? "soon" : "down");
   }
-  const lines = (state.callouts || []).map(row => "<p>" + row[1] + "</p>").join("");
-  document.getElementById("lines").innerHTML = lines;
-  document.getElementById("spikes").innerHTML = (state.spikes || []).slice(-3).map(s => "<li>" + s + "</li>").join("");
+  document.getElementById("lines").innerHTML = (state.callouts || []).map(row => "<p>" + esc(row[1]) + "</p>").join("");
+  document.getElementById("spikes").innerHTML = (state.spikes || []).slice(-3).map(s => "<li>" + esc(s) + "</li>").join("");
 }
 tick();
 setInterval(tick, 1000);

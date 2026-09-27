@@ -1,16 +1,15 @@
 """Click-through overlay for Rift Coach.
 
-This is a separate OS window. It does not hook DirectX, inject into League,
-install a keyboard hook, or read game memory. Mouse clicks pass through via
-WS_EX_TRANSPARENT. The show/hide key is RegisterHotKey, not a low-level hook.
-
-League must be in Borderless windowed mode. Exclusive fullscreen will cover this window.
+Separate OS window. No DirectX hook, no injection, no keyboard hook, no memory read.
+Mouse clicks pass through via WS_EX_TRANSPARENT. Show/hide is RegisterHotKey.
+League must be Borderless. Exclusive fullscreen will cover this window.
 """
 
 import ctypes
 import json
 import os
 import sys
+import time
 from ctypes import wintypes
 
 import lol_coach
@@ -35,6 +34,15 @@ MOD_CONTROL = 0x0002
 MOD_NOREPEAT = 0x4000
 VK_O = 0x4F
 HOTKEY_ID = 0x4F10
+
+CARD = "#10141c"
+BRASS = "#d4b483"
+TEXT = "#f4f1ea"
+MUTED = "#8d93a0"
+UP = "#8fbf9f"
+SOON = "#e2b15a"
+DOWN = "#d37b7b"
+TRACK = "#1c2230"
 
 user32 = ctypes.windll.user32
 
@@ -100,6 +108,16 @@ def apply_exstyle(hwnd, click_through):
     return user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
 
 
+def timer_style(remain):
+    if remain is None:
+        return "--", MUTED
+    if remain <= 0:
+        return "UP", UP
+    if remain <= 60:
+        return lol_coach.fmt_time(remain), SOON
+    return lol_coach.fmt_time(remain), TEXT
+
+
 def run(bus, stop, edit=False):
     import tkinter as tk
     from tkinter import font as tkfont
@@ -107,7 +125,7 @@ def run(bus, stop, edit=False):
     layout = load_layout()
     scale = float(layout.get("scale", 1.0))
     width = int(layout["w"] * scale)
-    height = int(470 * scale)
+    height = int(560 * scale)
     fade = CONFIG["overlay"]["callout_fade_seconds"]
 
     root = tk.Tk()
@@ -130,47 +148,68 @@ def run(bus, stop, edit=False):
     family = "Segoe UI"
     title_font = tkfont.Font(family=family, size=max(8, int(9 * scale)), weight="bold")
     body_font = tkfont.Font(family=family, size=max(8, int(10 * scale)))
-    mono_font = tkfont.Font(family="Consolas", size=max(8, int(11 * scale)))
+    mono_font = tkfont.Font(family="Consolas", size=max(9, int(12 * scale)))
+    small_font = tkfont.Font(family=family, size=max(8, int(9 * scale)))
 
-    panel = tk.Frame(root, bg="#141820", padx=8, pady=8)
-    panel.pack(fill="both", expand=True)
+    shell = tk.Frame(root, bg=CARD)
+    shell.pack(fill="both", expand=True)
+    tk.Frame(shell, bg=BRASS, width=3).pack(side="left", fill="y")
+    panel = tk.Frame(shell, bg=CARD, padx=10, pady=10)
+    panel.pack(side="left", fill="both", expand=True)
 
-    header = tk.Label(panel, text="RIFT COACH" + ("  EDIT" if edit else ""), bg="#141820", fg="#8b909a", font=title_font, anchor="w")
+    header = tk.Label(
+        panel,
+        text="RIFT" + ("  EDIT" if edit else ""),
+        bg=CARD, fg=BRASS, font=title_font, anchor="w",
+    )
     header.pack(fill="x")
-    clock = tk.Label(panel, text="--:--", bg="#141820", fg="#e7e5e4", font=mono_font, anchor="w")
+    clock = tk.Label(panel, text="READY", bg=CARD, fg=TEXT, font=mono_font, anchor="w")
     clock.pack(fill="x")
+    who = tk.Label(panel, text="Queue up", bg=CARD, fg=MUTED, font=body_font, anchor="w")
+    who.pack(fill="x", pady=(0, 4))
+    shop_label = tk.Label(
+        panel, text="", bg=CARD, fg=BRASS, font=small_font, anchor="w",
+        wraplength=width - 36, justify="left",
+    )
+    shop_label.pack(fill="x", pady=(0, 4))
 
     timer_labels = {}
     name_labels = {}
     for key, title in (("dragon", "Dragon"), ("grubs", "Grubs"), ("herald", "Herald"), ("baron", "Baron")):
-        row = tk.Frame(panel, bg="#141820")
+        row = tk.Frame(panel, bg=CARD)
         row.pack(fill="x", pady=1)
-        name = tk.Label(row, text=title, bg="#141820", fg="#8b909a", font=body_font, width=8, anchor="w")
+        name = tk.Label(row, text=title, bg=CARD, fg=MUTED, font=body_font, width=8, anchor="w")
         name.pack(side="left")
-        lbl = tk.Label(row, text="--", bg="#141820", fg="#e7e5e4", font=mono_font, anchor="e")
+        lbl = tk.Label(row, text="--", bg=CARD, fg=MUTED, font=mono_font, anchor="e")
         lbl.pack(side="right")
         timer_labels[key] = lbl
         name_labels[key] = name
 
-    tk.Frame(panel, bg="#2a3140", height=1).pack(fill="x", pady=6)
+    tk.Frame(panel, bg="#242a36", height=1).pack(fill="x", pady=8)
     callout_labels = []
     for _ in range(3):
-        lbl = tk.Label(panel, text="", bg="#141820", fg="#e7e5e4", font=body_font, anchor="w", wraplength=width - 24, justify="left")
+        lbl = tk.Label(
+            panel, text="", bg=CARD, fg=TEXT, font=small_font, anchor="w",
+            wraplength=width - 36, justify="left",
+        )
         lbl.pack(fill="x")
         callout_labels.append(lbl)
 
-    tk.Frame(panel, bg="#2a3140", height=1).pack(fill="x", pady=6)
-    gold_caption = tk.Label(panel, text="Item gold", bg="#141820", fg="#8b909a", font=body_font, anchor="w")
-    gold_caption.pack(fill="x")
-    gold_canvas = tk.Canvas(panel, width=width - 24, height=int(12 * scale), bg="#141820", highlightthickness=0)
+    gold_caption = tk.Label(panel, text="", bg=CARD, fg=MUTED, font=small_font, anchor="w")
+    gold_caption.pack(fill="x", pady=(8, 0))
+    gold_canvas = tk.Canvas(panel, width=width - 36, height=int(8 * scale), bg=CARD, highlightthickness=0)
     gold_canvas.pack(fill="x")
-    cs_label = tk.Label(panel, text="", bg="#141820", fg="#e7e5e4", font=body_font, anchor="w")
+    cs_label = tk.Label(panel, text="", bg=CARD, fg=TEXT, font=small_font, anchor="w")
     cs_label.pack(fill="x", pady=(6, 0))
-    spike_label = tk.Label(panel, text="", bg="#141820", fg="#f0b45a", font=body_font, anchor="w", wraplength=width - 24, justify="left")
+    spike_label = tk.Label(
+        panel, text="", bg=CARD, fg=SOON, font=small_font, anchor="w",
+        wraplength=width - 36, justify="left",
+    )
     spike_label.pack(fill="x", pady=(4, 0))
 
     hidden = {"value": False}
     drag = {"x": 0, "y": 0}
+    ticks = {"n": 0}
 
     def hide_show():
         hidden["value"] = not hidden["value"]
@@ -199,61 +238,80 @@ def run(bus, stop, edit=False):
 
     def refresh():
         state = bus.snapshot()
+        in_game = bool(state.get("in_game"))
+        ticks["n"] += 1
+        clock.configure(text=state.get("clock") or "READY", fg=TEXT)
+        if in_game:
+            champ = state.get("champion") or "Live"
+            pos = state.get("position") or ""
+            kda = state.get("kda") or ""
+            level = state.get("level")
+            level_bit = "  lvl %s" % level if level else ""
+            who.configure(text="%s  %s  %s%s" % (champ, pos, kda, level_bit), fg=TEXT)
+        else:
+            who.configure(text=state.get("hint") or "Queue up. Borderless.", fg=MUTED)
         now_t = state.get("t")
-        clock.configure(text=state.get("clock", "waiting") if state else "waiting")
         spawns = state.get("spawns") or {}
-        labels = {"dragon": "Elder" if state.get("elder") else "Dragon", "grubs": "Grubs", "herald": "Herald", "baron": "Baron"}
+        labels = {
+            "dragon": "Elder" if state.get("elder") else "Dragon",
+            "grubs": "Grubs",
+            "herald": "Herald",
+            "baron": "Baron",
+        }
         for key, lbl in timer_labels.items():
             name_labels[key].configure(text=labels[key])
-            if key not in spawns or now_t is None:
-                lbl.configure(text="--", fg="#5c6370")
-                continue
-            remain = spawns[key] - now_t
-            if remain <= 0:
-                lbl.configure(text="UP", fg="#7dcea0")
-            elif remain <= 60:
-                lbl.configure(text=lol_coach.fmt_time(remain), fg="#f0b45a")
-            else:
-                lbl.configure(text=lol_coach.fmt_time(remain), fg="#e7e5e4")
-        callouts = state.get("callouts") or []
+            remain = None
+            if in_game and key in spawns and now_t is not None:
+                remain = spawns[key] - now_t
+            text, color = timer_style(remain if in_game else None)
+            lbl.configure(text=text, fg=color)
         visible = []
-        wall = __import__("time").time()
-        for row in callouts:
+        wall = time.time()
+        for row in state.get("callouts") or []:
             if len(row) < 3 or wall - row[2] > fade:
                 continue
             visible.append(row[1])
         for idx, lbl in enumerate(callout_labels):
             lbl.configure(text=visible[idx] if idx < len(visible) else "")
-        diff = state.get("gold_diff", 0) or 0
-        prev = state.get("prev_gold_diff", diff) or 0
-        arrow = "^" if diff > prev + 200 else ("v" if diff < prev - 200 else "-")
-        side = "+" if diff >= 0 else "-"
-        gold_caption.configure(text="Item gold %s%.1fk %s" % (side, abs(diff) / 1000.0, arrow))
         gold_canvas.delete("all")
-        bar_w = max(10, width - 24)
-        mid = bar_w / 2
-        gold_canvas.create_rectangle(0, 2, bar_w, int(10 * scale), fill="#222733", outline="")
-        span = max(-1.0, min(1.0, diff / 5000.0)) * (bar_w / 2)
-        color = "#7dcea0" if diff >= 0 else "#e07a7a"
-        if span >= 0:
-            gold_canvas.create_rectangle(mid, 2, mid + span, int(10 * scale), fill=color, outline="")
+        if not in_game:
+            gold_caption.configure(text="")
+            cs_label.configure(text="")
+            spike_label.configure(text="")
+            shop_label.configure(text="")
         else:
-            gold_canvas.create_rectangle(mid + span, 2, mid, int(10 * scale), fill=color, outline="")
-        pos = state.get("position")
-        if not state or pos == "UTILITY":
-            cs_label.configure(text="" if pos == "UTILITY" else "CS --")
-        else:
-            rate = state.get("cs_rate", 0) or 0
-            target = state.get("cs_target", 8) or 8
-            if rate >= target - 0.3:
-                color = "#7dcea0"
-            elif rate >= target - 1.5:
-                color = "#f0b45a"
+            diff = state.get("gold_diff", 0) or 0
+            prev = state.get("prev_gold_diff", diff) or 0
+            arrow = "^" if diff > prev + 200 else ("v" if diff < prev - 200 else "-")
+            side = "+" if diff >= 0 else ""
+            gold_caption.configure(text="Gold %s%.1fk %s" % (side, diff / 1000.0, arrow))
+            bar_w = max(10, width - 36)
+            mid = bar_w / 2
+            gold_canvas.create_rectangle(0, 2, bar_w, int(8 * scale), fill=TRACK, outline="")
+            span = max(-1.0, min(1.0, diff / 5000.0)) * (bar_w / 2)
+            color = UP if diff >= 0 else DOWN
+            if span >= 0:
+                gold_canvas.create_rectangle(mid, 2, mid + span, int(8 * scale), fill=color, outline="")
             else:
-                color = "#e07a7a"
-            cs_label.configure(text="CS %.1f / %g" % (rate, target), fg=color)
-        spikes = state.get("spikes") or []
-        spike_label.configure(text="\n".join(spikes[-2:]))
+                gold_canvas.create_rectangle(mid + span, 2, mid, int(8 * scale), fill=color, outline="")
+            pos = state.get("position")
+            if pos == "UTILITY":
+                cs_label.configure(text="")
+            else:
+                rate = state.get("cs_rate", 0) or 0
+                target = state.get("cs_target", 8) or 8
+                if rate >= target - 0.3:
+                    color = UP
+                elif rate >= target - 1.5:
+                    color = SOON
+                else:
+                    color = DOWN
+                cs_label.configure(text="CS %.1f / %g" % (rate, target), fg=color)
+            spike_label.configure(text="\n".join((state.get("spikes") or [])[-2:]))
+            shop_label.configure(text="\n".join(state.get("shop") or []))
+        if ticks["n"] % 20 == 0 and not hidden["value"]:
+            root.attributes("-topmost", True)
+            apply_style()
         root.after(100, refresh)
 
     if edit:
@@ -274,14 +332,13 @@ def run(bus, stop, edit=False):
             for child in widget.winfo_children():
                 bind_drag(child)
 
-        bind_drag(panel)
+        bind_drag(shell)
 
-    hotkey_ref = None
+    hotkey_ok = None
     if sys.platform.startswith("win"):
-        ok = user32.RegisterHotKey(None, HOTKEY_ID, MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, VK_O)
-        if not ok:
-            print("Overlay hotkey Ctrl+Shift+O was already taken. Overlay still shows.", flush=True)
-        hotkey_ref = ok
+        hotkey_ok = user32.RegisterHotKey(None, HOTKEY_ID, MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, VK_O)
+        if not hotkey_ok:
+            print("Overlay hotkey Ctrl+Shift+O is already taken. Overlay still shows.", flush=True)
 
     def on_close():
         if sys.platform.startswith("win"):
@@ -299,4 +356,4 @@ def run(bus, stop, edit=False):
         if sys.platform.startswith("win"):
             user32.UnregisterHotKey(None, HOTKEY_ID)
         stop.set()
-        del hotkey_ref
+        del hotkey_ok

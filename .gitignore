@@ -1,8 +1,22 @@
-*.log
+# Generated runtime artifacts
 logs/
 captures/
-.env
-__pycache__/
-*.pyc
+reports/
 overlay_layout.json
+
+# Secrets
+.env
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
 .pytest_cache/
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+
+# Logs
+*.log

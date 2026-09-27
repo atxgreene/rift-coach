@@ -162,28 +162,29 @@ class CoachTests(unittest.TestCase):
 
     def test_me_flag_matches_riot_id(self):
         data = frame(40)
-        data["activePlayer"] = {"riotId": "Austin#NA1"}
+        data["activePlayer"] = {"riotId": "PlayerOne#NA1"}
         data["allPlayers"][0]["summonerName"] = ""
-        data["allPlayers"][0]["riotIdGameName"] = "Austin"
+        data["allPlayers"][0]["riotIdGameName"] = "PlayerOne"
         data["allPlayers"][0]["riotIdTagline"] = "NA1"
-        coach = lol_coach.Coach(self.voice, FakeDD(), me_name="Austin#NA1")
+        coach = lol_coach.Coach(self.voice, FakeDD(), me_name="PlayerOne#NA1")
         coach.tick(data)
         self.assertFalse(coach.missed_me)
         self.assertEqual(coach.me["championName"], "Ahri")
 
     def test_capture_throttles_and_keeps_new_events(self):
         tmp = tempfile.mkdtemp()
+        cap = lol_coach.Capture(tmp)
         try:
-            cap = lol_coach.Capture(tmp)
             first = frame(10)
             second = frame(12)
             third = frame(14, events=[{"EventID": 1, "EventName": "GameStart", "EventTime": 5}])
             self.assertIsNotNone(cap.maybe_write(first, now=100))
             self.assertIsNone(cap.maybe_write(second, now=102))
             self.assertIsNotNone(cap.maybe_write(third, now=103))
-            files = sorted(os.listdir(cap.dir))
+            files = sorted(name for name in os.listdir(cap.dir) if name.endswith(".json"))
             self.assertEqual(files, ["0000.json", "0001.json"])
         finally:
+            cap.close()
             shutil.rmtree(tmp)
 
     def test_replay_frames_drive_coach(self):
@@ -208,6 +209,10 @@ class CoachTests(unittest.TestCase):
             text = open(os.path.join(root, name), encoding="utf-8").read()
             for banned in BANNED:
                 self.assertNotIn(banned, text, "%s contains %s" % (name, banned))
+
+    def test_arg_parser_accepts_doctor(self):
+        args = lol_coach.build_arg_parser().parse_args(["--doctor"])
+        self.assertTrue(args.doctor)
 
     def test_web_state_is_localhost_json(self):
         bus = lol_coach.UiBus()
@@ -243,6 +248,56 @@ class CoachTests(unittest.TestCase):
             self.coach.tick(frame(301))
         elapsed = time.perf_counter() - start
         self.assertLess(elapsed / 500.0, 0.01)
+
+    def test_name_match_ignores_case(self):
+        data = frame(40)
+        data["activePlayer"] = {"riotIdGameName": "playerone"}
+        data["allPlayers"][0]["summonerName"] = ""
+        data["allPlayers"][0]["riotIdGameName"] = "PlayerOne"
+        self.coach.tick(data)
+        self.assertEqual(self.coach.me["championName"], "Ahri")
+
+    def test_null_items_do_not_crash(self):
+        data = frame(40)
+        data["allPlayers"][0]["items"] = None
+        data["allPlayers"][1]["items"] = None
+        data["events"] = None
+        self.coach.tick(data)
+        self.assertEqual(self.coach.me["championName"], "Ahri")
+
+    def test_three_early_deaths_set_the_focus(self):
+        self.coach.me = {"championName": "Ahri", "position": "MIDDLE", "scores": {}}
+        self.coach.death_log = [
+            {"t": 80, "by": "Syndra"},
+            {"t": 140, "by": "Syndra"},
+            {"t": 200, "by": "Elise"},
+        ]
+        self.assertEqual(lol_coach.focus_line(self.coach), "Next game: farm the first ten minutes.")
+
+    def test_match_report_is_local_and_has_one_focus(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            self.coach.me = {"championName": "Ahri", "position": "MIDDLE", "scores": {"kills": 1, "deaths": 2, "assists": 3, "creepScore": 80}}
+            self.coach.t = 900
+            self.coach.cs_marks = {10: 55, 15: 80}
+            self.coach.death_log = [{"t": 400, "by": "Syndra"}]
+            self.coach.objectives = [{"t": 420, "name": "dragon", "who": "They", "detail": "Fire"}]
+            path = lol_coach.write_match_report(self.coach, "game end", folder=tmp)
+            with open(path, encoding="utf-8") as handle:
+                text = handle.read()
+            self.assertIn("Next game:", text)
+            self.assertIn("Ahri", text)
+            self.assertNotIn("ANTHROPIC", text)
+            self.assertTrue(path.startswith(tmp))
+        finally:
+            shutil.rmtree(tmp)
+
+    def test_timer_style_colors(self):
+        import overlay
+        self.assertEqual(overlay.timer_style(None)[0], "--")
+        self.assertEqual(overlay.timer_style(-1)[0], "UP")
+        self.assertEqual(overlay.timer_style(45)[0], "0:45")
+        self.assertEqual(overlay.timer_style(90)[0], "1:30")
 
 
 if __name__ == "__main__":

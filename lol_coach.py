@@ -31,6 +31,9 @@ import time
 import urllib.error
 import urllib.request
 
+import shop
+import patterns
+
 LIVE_URL = "https://127.0.0.1:2999/liveclientdata/allgamedata"
 DDRAGON = "https://ddragon.leagueoflegends.com"
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -72,8 +75,8 @@ CONFIG = {
         "hotkey": "ctrl+shift+o",
         "callout_fade_seconds": 12,
         "layouts": {
-            "1080p": {"x": 1690, "y": 200, "w": 214, "scale": 1.0, "opacity": 0.94},
-            "1440p": {"x": 2260, "y": 280, "w": 250, "scale": 1.15, "opacity": 0.94},
+            "1080p": {"x": 1936, "y": -95, "w": 280, "scale": 1.0, "opacity": 0.94},
+            "1440p": {"x": 20, "y": 240, "w": 268, "scale": 1.15, "opacity": 0.94},
         },
     },
 }
@@ -179,7 +182,10 @@ class Speaker:
         if self.proc is None or self.proc.poll() is not None:
             script = (
                 "Add-Type -AssemblyName System.Speech;"
-                "$s=New-Object System.Speech.Synthesis.SpeechSynthesizer;$s.Rate=1;"
+                "[Console]::InputEncoding = [Text.Encoding]::UTF8;"
+                "$s=New-Object System.Speech.Synthesis.SpeechSynthesizer;"
+                "$s.Rate=0; $s.Volume=100;"
+                "try { $s.SelectVoice('Microsoft Zira Desktop') } catch {}"
                 "while(($l=[Console]::In.ReadLine()) -ne $null){$s.Speak($l)}"
             )
             kwargs = dict(
@@ -187,6 +193,7 @@ class Speaker:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 text=True,
+                encoding="utf-8",
             )
             if sys.platform.startswith("win"):
                 kwargs["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
@@ -212,14 +219,36 @@ class Speaker:
 class DataDragon:
     def __init__(self):
         self.item_gold, self.item_tags, self.champ_info = {}, {}, {}
+        self.catalog = {"_by_name": {}}
         self.patch = None
         try:
             ver = self._get("%s/api/versions.json" % DDRAGON)[0]
             self.patch = ver
             items = self._get("%s/cdn/%s/data/en_US/item.json" % (DDRAGON, ver))["data"]
             for key, value in items.items():
-                self.item_gold[int(key)] = value.get("gold", {}).get("total", 0)
-                self.item_tags[int(key)] = value.get("tags", [])
+                try:
+                    iid = int(key)
+                except (TypeError, ValueError):
+                    continue
+                self.item_gold[iid] = value.get("gold", {}).get("total", 0)
+                self.item_tags[iid] = value.get("tags", [])
+                maps = value.get("maps") or {}
+                if maps and not maps.get("11", False):
+                    continue
+                if iid >= 20000:
+                    continue
+                name = value.get("name") or ""
+                self.catalog[iid] = {
+                    "name": name,
+                    "gold": value.get("gold", {}).get("total", 0) or 0,
+                    "tags": value.get("tags") or [],
+                    "desc": value.get("description") or "",
+                    "from": value.get("from") or [],
+                    "into": value.get("into") or [],
+                    "in_store": value.get("inStore", True),
+                }
+                if name:
+                    self.catalog["_by_name"][name.lower()] = iid
             champs = self._get("%s/cdn/%s/data/en_US/champion.json" % (DDRAGON, ver))["data"]
             for value in champs.values():
                 self.champ_info[value["id"].lower()] = value["info"]
@@ -294,20 +323,39 @@ class ClaudeCoach:
 
 
 def names_of(player):
-    out = set()
+    raw = set()
     if not isinstance(player, dict):
-        return out
+        return raw
     for key in ("summonerName", "riotIdGameName", "riotId", "gameName", "playerName"):
         value = player.get(key)
         if isinstance(value, str) and value:
-            out.add(value)
-            out.add(value.split("#")[0])
+            raw.add(value)
+            raw.add(value.split("#")[0])
     game = player.get("riotIdGameName") or player.get("gameName")
     tag = player.get("riotIdTagline") or player.get("tagLine")
     if game and tag:
-        out.add("%s#%s" % (game, tag))
-        out.add(game)
+        raw.add("%s#%s" % (game, tag))
+        raw.add(game)
+    out = set()
+    for name in raw:
+        out.add(name)
+        out.add(name.lower())
     return out
+
+
+def name_hit(name, names):
+    if not name or not isinstance(name, str):
+        return False
+    return name in names or name.lower() in names
+
+
+def as_list(value):
+    return value if isinstance(value, list) else []
+
+
+def scores_of(player):
+    scores = player.get("scores") if isinstance(player, dict) else None
+    return scores if isinstance(scores, dict) else {}
 
 
 class Coach:
@@ -317,6 +365,7 @@ class Coach:
         self.claude = claude
         self.bus = bus
         self.me_name = me_name
+        self.on_new_event = None
         self.reset()
 
     def reset(self):
@@ -346,6 +395,22 @@ class Coach:
         self.seen_events = set()
         self.dragon_kills = 0
         self.elder = False
+        self.death_log = []
+        self.objectives = []
+        self.cs_marks = {}
+        self.gold_curve = []
+        self.last_gold_sample = 0
+        self.game_over = False
+        self.reported = False
+        self.result = ""
+        self.shop_lines = []
+        self.move_speed = 0
+        self.last_shop_key = None
+        self.last_shop_said = -999
+        self.pattern_said = set()
+        self.guidance = ""
+        self.cs_rates = []
+        self.sample_prev = 0
         self.t = 0
         self.players = []
         self.me = None
@@ -366,7 +431,7 @@ class Coach:
         if not name:
             return None
         for player in self.players:
-            if name in names_of(player):
+            if name_hit(name, names_of(player)):
                 return player
         return None
 
@@ -375,10 +440,10 @@ class Coach:
         for player in self.players:
             if player.get("team") != team:
                 continue
-            for item in player.get("items", []):
-                if item.get("consumable"):
+            for item in as_list(player.get("items")):
+                if not isinstance(item, dict) or item.get("consumable"):
                     continue
-                total += self.dd.gold(item) * max(1, item.get("count", 1))
+                total += self.dd.gold(item) * max(1, item.get("count", 1) or 1)
         return total
 
     def live_diff(self):
@@ -390,14 +455,26 @@ class Coach:
         return self.team_gold(self.my_team) - self.team_gold(enemy_team)
 
     def tick(self, data):
-        self.t = data.get("gameData", {}).get("gameTime", 0) or 0
-        self.players = data.get("allPlayers", [])
-        active = data.get("activePlayer", {})
+        game = data.get("gameData") if isinstance(data.get("gameData"), dict) else {}
+        try:
+            self.t = float(game.get("gameTime", 0) or 0)
+        except (TypeError, ValueError):
+            self.t = 0
+        players = data.get("allPlayers")
+        self.players = players if isinstance(players, list) else []
+        active = data.get("activePlayer") if isinstance(data.get("activePlayer"), dict) else {}
         mine = names_of(active)
         if self.me_name:
             mine.add(self.me_name)
+            mine.add(self.me_name.lower())
             mine.add(self.me_name.split("#")[0])
+            mine.add(self.me_name.split("#")[0].lower())
         self.me = next((player for player in self.players if names_of(player) & mine), None)
+        stats = active.get("championStats") if isinstance(active.get("championStats"), dict) else {}
+        try:
+            self.move_speed = float(stats.get("moveSpeed") or 0)
+        except (TypeError, ValueError):
+            self.move_speed = 0
         if not self.me:
             if not self.missed_me:
                 print("Couldn't match your summoner in allPlayers. Re-run with --me YourName", flush=True)
@@ -409,7 +486,14 @@ class Coach:
         self.my_names = names_of(self.me) | mine
 
         late = self.first_tick and self.t > 30
-        self.handle_events(data.get("events", {}).get("Events", []), silent=late)
+        events = data.get("events")
+        if isinstance(events, dict):
+            event_list = events.get("Events") or []
+        elif isinstance(events, list):
+            event_list = events
+        else:
+            event_list = []
+        self.handle_events(as_list(event_list), silent=late)
         if self.first_tick:
             self.prev_t = self.t
             self.reconcile_clock()
@@ -421,9 +505,25 @@ class Coach:
         self.cs_check()
         self.gold_bank(active)
         self.gold_diff()
+        self.sample()
+        self.shop_check(active)
+        self.pattern_check()
         self.claude_checkin(periodic=True)
         self.publish()
         self.first_tick = False
+
+    def sample(self):
+        cs = scores_of(self.me).get("creepScore", 0)
+        if not self.first_tick:
+            for mark in (10, 15, 20):
+                boundary = mark * 60
+                if mark not in self.cs_marks and self.sample_prev < boundary <= self.t:
+                    self.cs_marks[mark] = cs
+        self.sample_prev = self.t
+        if self.t - self.last_gold_sample >= 60:
+            self.last_gold_sample = self.t
+            self.gold_curve.append((int(self.t), int(self.live_diff())))
+            self.gold_curve = self.gold_curve[-40:]
 
     def reconcile_clock(self):
         if self.t >= CONFIG["grubs_despawn"] and self.spawns.get("grubs", 0) <= CONFIG["grubs_first_spawn"]:
@@ -444,6 +544,8 @@ class Coach:
             if name and name not in self.seen_events:
                 self.seen_events.add(name)
                 print("[event] %s" % name, flush=True)
+                if self.on_new_event:
+                    self.on_new_event(name)
             killer = self.player_by_name(ev.get("KillerName", ""))
             ours = killer is not None and killer.get("team") == self.my_team
             who = "We" if ours else "They"
@@ -461,17 +563,21 @@ class Coach:
                     nxt = et + CONFIG["dragon_respawn"]
                     out = "%s took %s dragon.%s Next dragon at %s." % (who, kind, stolen, fmt_time(nxt))
                 self.spawns["dragon"] = nxt
+                self.objectives.append({"t": et, "name": "dragon", "who": who, "detail": kind})
             elif name == "BaronKill":
                 nxt = et + CONFIG["baron_respawn"]
                 self.spawns["baron"] = nxt
+                self.objectives.append({"t": et, "name": "baron", "who": who, "detail": ""})
                 out = "%s took Baron. Buff lasts about 3 minutes. Next Baron at %s." % (who, fmt_time(nxt))
             elif name == "HeraldKill":
                 self.spawns.pop("herald", None)
+                self.objectives.append({"t": et, "name": "herald", "who": who, "detail": ""})
                 out = "%s took Herald." % who
             elif name in ("HordeKill", "VoidGrubKill"):
                 self.spawns.pop("grubs", None)
+                self.objectives.append({"t": et, "name": "grubs", "who": who, "detail": ""})
                 out = "%s took a void grub." % who
-            elif name == "ChampionKill" and ev.get("VictimName") in self.my_names:
+            elif name == "ChampionKill" and name_hit(ev.get("VictimName"), self.my_names):
                 self.deaths += 1
                 if not silent:
                     self.on_death(ev)
@@ -486,7 +592,16 @@ class Coach:
             elif name == "InhibKilled":
                 out = "An inhibitor just fell."
             elif name == "GameEnd":
-                out = "Game over. Good games. Note one thing to work on next match."
+                self.game_over = True
+                winning = ev.get("WinningTeam")
+                if winning and self.my_team:
+                    self.result = "win" if str(winning) == str(self.my_team) else "loss"
+                raw = ev.get("Result")
+                if isinstance(raw, str) and raw.lower() in ("win", "victory"):
+                    self.result = "win"
+                elif isinstance(raw, str) and raw.lower() in ("loss", "defeat", "fail"):
+                    self.result = "loss"
+                out = "Game over. %s" % focus_line(self)
 
             if out and not silent:
                 self.speak(out)
@@ -496,15 +611,23 @@ class Coach:
     def on_death(self, ev):
         killer = self.player_by_name(ev.get("KillerName", ""))
         by = killer.get("championName") if killer else (ev.get("KillerName") or "something")
-        timer = int(self.me.get("respawnTimer", 0) or 0)
+        timer = 0
+        try:
+            timer = int(float(self.me.get("respawnTimer", 0) or 0))
+        except (TypeError, ValueError):
+            timer = 0
         msg = "Death %d, to %s." % (self.deaths, by)
         if timer:
             msg += " %d seconds." % timer
         if self.t < 600 and self.deaths >= 3:
-            msg += " Three early deaths - prioritize farm and safety for a bit."
+            msg += " Three early deaths. Farm and stay alive for a bit."
+        self.death_log.append({"t": self.t, "by": by})
         self.speak(msg)
+        pattern = self.fresh_pattern()
         if self.claude:
             self.claude_checkin(trigger="I just died to %s." % by)
+        elif pattern:
+            self.speak(pattern)
         else:
             self.say(random.choice(DEATH_QUESTIONS))
 
@@ -553,7 +676,9 @@ class Coach:
         for player in self.enemies:
             champ = player.get("championName", "?")
             seen = self.enemy_legendaries.setdefault(champ, set())
-            for item in player.get("items", []):
+            for item in as_list(player.get("items")):
+                if not isinstance(item, dict):
+                    continue
                 iid = item.get("itemID")
                 if iid in seen or not self.dd.is_legendary(item):
                     continue
@@ -565,13 +690,21 @@ class Coach:
                     self.speak(label)
 
     def levels(self):
-        if not self.me6 and self.me.get("level", 0) >= 6:
+        try:
+            my_level = int(self.me.get("level") or 0)
+        except (TypeError, ValueError):
+            my_level = 0
+        if not self.me6 and my_level >= 6:
             self.me6 = True
             self.speak("Level 6. Ult is online.")
         pos = norm_pos(self.me.get("position"))
         if not self.opp6 and pos:
             opp = next((player for player in self.enemies if norm_pos(player.get("position")) == pos), None)
-            if opp and opp.get("level", 0) >= 6:
+            try:
+                opp_level = int(opp.get("level") or 0) if opp else 0
+            except (TypeError, ValueError):
+                opp_level = 0
+            if opp and opp_level >= 6:
                 self.opp6 = True
                 label = "Their %s just hit 6. Respect the ult." % opp.get("championName")
                 self.spikes.append(label)
@@ -584,16 +717,27 @@ class Coach:
         if self.t - self.last_cs < CONFIG["cs_check_every"]:
             return
         self.last_cs = self.t
-        cs = self.me.get("scores", {}).get("creepScore", 0)
+        cs = scores_of(self.me).get("creepScore", 0)
+        try:
+            cs = int(cs)
+        except (TypeError, ValueError):
+            cs = 0
         rate = cs / (self.t / 60.0) if self.t else 0
         target = CONFIG["cs_target_per_min"]
+        self.cs_rates.append((self.t, rate))
+        self.cs_rates = self.cs_rates[-6:]
         msg = "%d minutes, %s CS. %.1f per minute." % (int(self.t // 60), int(cs), rate)
-        if rate < target - 1.5:
+        if rate < target - 1.5 and not self._cs_is_stuck():
             msg += " Target is %g." % target
+        elif self._cs_is_stuck():
+            msg = "CS has been under 5 all game. Catch the wave before you fight."
         self.speak(msg)
 
     def gold_bank(self, active):
-        gold = active.get("currentGold", 0)
+        try:
+            gold = float(active.get("currentGold", 0) or 0)
+        except (TypeError, ValueError):
+            return
         if self.me.get("isDead") or gold < CONFIG["gold_bank_threshold"]:
             return
         if self.t - self.last_gold_bank < CONFIG["gold_bank_cooldown"]:
@@ -629,9 +773,11 @@ class Coach:
 
     def snapshot(self, trigger):
         def line(player):
-            scores = player.get("scores", {})
+            scores = scores_of(player)
             items = ", ".join(
-                item.get("displayName", "") for item in player.get("items", []) if not item.get("consumable")
+                item.get("displayName", "")
+                for item in as_list(player.get("items"))
+                if isinstance(item, dict) and not item.get("consumable")
             ) or "none"
             dead = " (dead)" if player.get("isDead") else ""
             return "%s %s lvl%s %s/%s/%s %scs%s [%s]" % (
@@ -665,15 +811,87 @@ class Coach:
             )
         )
 
+    def shop_check(self, active):
+        try:
+            gold = float(active.get("currentGold") or 0)
+        except (TypeError, ValueError):
+            gold = 0
+        me = dict(self.me)
+        me["_info"] = self.dd.info(self.me) or {}
+        me["_ad"] = sum(1 for enemy in self.enemies if (self.dd.info(enemy) or {}).get("attack", 0) >= (self.dd.info(enemy) or {}).get("magic", 0))
+        me["_ap"] = len(self.enemies) - me["_ad"]
+        me["_move_speed"] = self.move_speed
+        allies = [player for player in self.players if player.get("team") == self.my_team and player is not self.me]
+        catalog = getattr(self.dd, "catalog", None) or {"_by_name": {}}
+        advice = shop.advise(me, self.enemies, gold, catalog, self.t, allies=allies, deaths=self.deaths)
+        self.shop_lines = advice.get("lines") or []
+        key = advice.get("key")
+        if not advice.get("speak") or key is None:
+            return
+        if key == self.last_shop_key and self.t - self.last_shop_said < 90:
+            return
+        if self.t - self.last_shop_said < 45:
+            return
+        self.last_shop_key = key
+        self.last_shop_said = self.t
+        self.speak(advice["speak"])
+
+    def _pattern_state(self):
+        owned = set()
+        for item in as_list(self.me.get("items") if self.me else []):
+            if isinstance(item, dict) and item.get("itemID") is not None:
+                owned.add(int(item["itemID"]))
+        catalog = getattr(self.dd, "catalog", None) or {}
+        return {
+            "t": self.t,
+            "deaths": self.death_log,
+            "has_boots": shop.has_boots(owned, catalog) or shop.quest_slot_boots(
+                (self.me or {}).get("position"), self.move_speed
+            ),
+            "cs_rates": self.cs_rates,
+            "gold_curve": self.gold_curve,
+            "objectives": self.objectives,
+        }
+
+    def _cs_is_stuck(self):
+        rates = [rate for stamp, rate in self.cs_rates if stamp >= 12 * 60]
+        return len(rates) >= 2 and rates[-1] < 5.5 and rates[-2] < 5.5
+
+    def fresh_pattern(self):
+        for note in patterns.scan(self._pattern_state()):
+            if note["key"] in self.pattern_said:
+                continue
+            if note["key"] == "cs-stuck":
+                continue
+            self.pattern_said.add(note["key"])
+            self.guidance = note["line"]
+            return note["line"]
+        return None
+
+    def pattern_check(self):
+        notes = patterns.scan(self._pattern_state())
+        if notes:
+            self.guidance = notes[0]["line"]
+        if self.t - self.last_shop_said <= 8:
+            return
+        line = self.fresh_pattern()
+        if line:
+            self.speak(line)
+
     def publish(self):
         if not self.bus or not self.me:
             return
-        cs = self.me.get("scores", {}).get("creepScore", 0)
+        scores = scores_of(self.me)
+        cs = scores.get("creepScore", 0)
         rate = (cs / (self.t / 60.0)) if self.t else 0
         diff = self.live_diff()
         state = {
             "t": self.t,
             "clock": fmt_time(self.t),
+            "status": "live",
+            "champion": self.me.get("championName") or "",
+            "level": self.me.get("level") or "",
+            "kda": "%s/%s/%s" % (scores.get("kills", 0), scores.get("deaths", 0), scores.get("assists", 0)),
             "spawns": dict(self.spawns),
             "elder": self.elder,
             "callouts": list(self.recent[-3:]),
@@ -684,6 +902,7 @@ class Coach:
             "cs_target": CONFIG["cs_target_per_min"],
             "position": norm_pos(self.me.get("position")),
             "spikes": list(self.spikes[-4:]),
+            "shop": ([self.guidance] if self.guidance else []) + list(self.shop_lines),
             "in_game": True,
         }
         self.last_ui_diff = diff
@@ -703,19 +922,46 @@ class LiveClient:
 
 class Capture:
     def __init__(self, root):
+        self.root = root
+        self.dir = None
+        self.n = 0
+        self.last_write = 0
+        self.seen_ids = set()
+        self.events_fp = None
+
+    def begin(self):
+        self.close()
         stamp = time.strftime("%Y%m%d-%H%M%S")
-        self.dir = os.path.join(root, stamp)
+        self.dir = os.path.join(self.root, stamp)
         os.makedirs(self.dir, exist_ok=True)
         self.n = 0
         self.last_write = 0
         self.seen_ids = set()
+        self.events_fp = open(os.path.join(self.dir, "events.txt"), "a", encoding="utf-8")
         print("Capturing to %s" % self.dir, flush=True)
+        return self.dir
+
+    def close(self):
+        if self.events_fp:
+            self.events_fp.close()
+            self.events_fp = None
+
+    def note_event(self, name):
+        if not self.events_fp:
+            return
+        self.events_fp.write(name + "\n")
+        self.events_fp.flush()
 
     def maybe_write(self, data, now=None):
+        if not self.dir:
+            self.begin()
         events = (data.get("events") or {}).get("Events") or []
+        if not isinstance(events, list):
+            events = []
         ids = set()
         for idx, ev in enumerate(events):
-            ids.add(ev.get("EventID", idx))
+            if isinstance(ev, dict):
+                ids.add(ev.get("EventID", idx))
         new_event = bool(ids - self.seen_ids)
         self.seen_ids |= ids
         now = time.time() if now is None else now
@@ -856,37 +1102,169 @@ class MockGame:
         }
 
 
+def focus_line(coach):
+    early = [row for row in coach.death_log if row.get("t", 0) < 600]
+    if len(early) >= 3:
+        return "Next game: farm the first ten minutes."
+    cs15 = coach.cs_marks.get(15)
+    pos = norm_pos(coach.me.get("position")) if coach.me else ""
+    if cs15 is not None and pos != "UTILITY":
+        try:
+            rate = float(cs15) / 15.0
+        except (TypeError, ValueError):
+            rate = 99
+        if rate < 6.5:
+            return "Next game: last-hit the cannon before you roam."
+    killers = [row.get("by") for row in coach.death_log if row.get("by")]
+    if killers:
+        top = max(set(killers), key=killers.count)
+        if killers.count(top) >= 2 and top != "something":
+            return "Next game: respect %s. Give the wave." % top
+    return "Next game: be at the objective 30 seconds early."
+
+
+def write_match_report(coach, reason, folder=None):
+    folder = folder or os.path.join(ROOT, "reports")
+    os.makedirs(folder, exist_ok=True)
+    champ = coach.me.get("championName") if coach.me else "unknown"
+    pos = norm_pos(coach.me.get("position")) if coach.me else ""
+    scores = scores_of(coach.me) if coach.me else {}
+    kda = "%s/%s/%s" % (scores.get("kills", 0), scores.get("deaths", 0), scores.get("assists", 0))
+    focus = focus_line(coach)
+    lines = [
+        "---",
+        "type: rift-coach-match",
+        "date: %s" % time.strftime("%Y-%m-%d"),
+        "champion: %s" % champ,
+        "role: %s" % (pos or "unknown"),
+        "result: %s" % (coach.result or "unknown"),
+        "reason: %s" % reason,
+        "---",
+        "",
+        "# %s %s" % (champ, pos),
+        "",
+        "KDA %s. Game time %s." % (kda, fmt_time(coach.t)),
+        "",
+        "## CS",
+    ]
+    if coach.cs_marks:
+        for mark in (10, 15, 20):
+            if mark in coach.cs_marks:
+                lines.append("- %d min: %s CS" % (mark, coach.cs_marks[mark]))
+    else:
+        lines.append("- not sampled")
+    lines.extend(["", "## Deaths"])
+    if coach.death_log:
+        for row in coach.death_log:
+            lines.append("- %s to %s" % (fmt_time(row.get("t", 0)), row.get("by")))
+    else:
+        lines.append("- none recorded")
+    lines.extend(["", "## Objectives"])
+    if coach.objectives:
+        for row in coach.objectives:
+            detail = (" " + row["detail"]) if row.get("detail") else ""
+            lines.append("- %s %s %s%s" % (fmt_time(row.get("t", 0)), row.get("who"), row.get("name"), detail))
+    else:
+        lines.append("- none recorded")
+    lines.extend(["", "## Item gold"])
+    if coach.gold_curve:
+        for stamp, diff in coach.gold_curve:
+            lines.append("- %s %s%d" % (fmt_time(stamp), "+" if diff >= 0 else "", diff))
+    else:
+        lines.append("- not sampled")
+    lines.extend(["", "## Focus", focus, ""])
+    path = os.path.join(folder, "%s-%s.md" % (time.strftime("%Y%m%d-%H%M%S"), champ))
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write("\n".join(lines))
+    return path
+
+
+def publish_wait(coach):
+    if not coach.bus:
+        return
+    coach.bus.publish({
+        "in_game": False,
+        "clock": "READY",
+        "status": "Queue up",
+        "hint": "Borderless   ·   Ctrl+Shift+O hides",
+        "champion": "",
+        "kda": "",
+        "level": "",
+        "spawns": {},
+        "callouts": [],
+        "spikes": [],
+        "gold_diff": 0,
+        "prev_gold_diff": 0,
+        "position": "",
+    })
+
+
+def finish_game(coach, reason, live):
+    if not live or coach.reported or not coach.me or coach.t < 30:
+        return None
+    path = write_match_report(coach, reason)
+    coach.reported = True
+    print("Match note: %s" % path, flush=True)
+    return path
+
+
 def run_loop(args, speaker, coach, client, capture, stop):
     in_game = False
     last_t = -1
     waiting_shown = False
+    last_tick_error = None
     delay = 0.05 if (args.demo or args.replay) else CONFIG["poll_seconds"]
+    live = not (args.demo or args.replay)
     print("Rift Coach running. Ctrl+C to quit.", flush=True)
+    if speaker.mode == "win":
+        print("Voice: Microsoft Zira. Hide overlay: Ctrl+Shift+O. League must be Borderless.", flush=True)
+    else:
+        print("Text only. Hide overlay: Ctrl+Shift+O. League must be Borderless.", flush=True)
+    publish_wait(coach)
     try:
         while not stop.is_set():
             try:
                 data = client.get()
-                t = data.get("gameData", {}).get("gameTime")
-                if t is None or "activePlayer" not in data:
+                t = (data.get("gameData") or {}).get("gameTime") if isinstance(data, dict) else None
+                if t is None or not isinstance(data, dict) or "activePlayer" not in data:
                     raise ValueError("loading")
-            except (urllib.error.URLError, ConnectionError, OSError, ValueError, json.JSONDecodeError):
+                t = float(t)
+            except (urllib.error.URLError, ConnectionError, OSError, ValueError, json.JSONDecodeError, AttributeError):
                 if in_game:
+                    finish_game(coach, "client closed", live)
                     print("Game closed. Waiting for the next one...", flush=True)
                     in_game = False
+                    publish_wait(coach)
                 elif not waiting_shown:
                     print("Waiting for a game to start...", flush=True)
+                    publish_wait(coach)
                 waiting_shown = True
                 time.sleep(2)
                 continue
 
-            if capture:
-                capture.maybe_write(data)
             if not in_game or t < last_t - 5:
+                if in_game:
+                    finish_game(coach, "new game", live)
                 coach.reset()
+                if capture:
+                    capture.begin()
+                    coach.on_new_event = capture.note_event
                 in_game = True
+                waiting_shown = False
                 speaker.say("Coach online. Let's get it.")
             last_t = t
-            coach.tick(data)
+            if capture:
+                capture.maybe_write(data)
+            try:
+                coach.tick(data)
+                last_tick_error = None
+            except Exception as exc:
+                msg = "%s: %s" % (type(exc).__name__, exc)
+                if msg != last_tick_error:
+                    print("Tick error, coach still running: %s" % msg, flush=True)
+                    last_tick_error = msg
+            if coach.game_over:
+                finish_game(coach, "game end", live)
             if args.demo and t > 1700:
                 speaker.say("Demo complete.")
                 time.sleep(0.4)
@@ -897,15 +1275,68 @@ def run_loop(args, speaker, coach, client, capture, stop):
                 break
             time.sleep(delay)
     except KeyboardInterrupt:
+        finish_game(coach, "stopped", live)
         print("\nCoach signing off.")
     finally:
+        if capture:
+            capture.close()
         stop.set()
         if coach.seen_events:
             print("Event names seen: %s" % ", ".join(sorted(coach.seen_events)), flush=True)
 
 
+def doctor_check():
+    """Print a buddy-friendly preflight report without starting the coach."""
+    rows = []
+
+    def add(name, ok, detail):
+        rows.append((name, bool(ok), detail))
+
+    add("Python", sys.version_info >= (3, 9), sys.version.split()[0])
+    add("No required pip packages", True, "stdlib-only runtime")
+
+    voice_mode = Speaker._detect()
+    add("Voice backend", bool(voice_mode), voice_mode or "not found; use --no-voice")
+
+    try:
+        import tkinter  # noqa: F401
+        add("Tkinter / overlay UI", True, "available")
+    except Exception as exc:
+        add("Tkinter / overlay UI", False, "%s: %s" % (type(exc).__name__, exc))
+
+    try:
+        versions = DataDragon._get("%s/api/versions.json" % DDRAGON)
+        latest = versions[0] if versions else "unknown"
+        add("Riot Data Dragon", True, "latest patch %s" % latest)
+    except Exception as exc:
+        add("Riot Data Dragon", False, "%s: %s" % (type(exc).__name__, exc))
+
+    try:
+        LiveClient().get()
+        add("League Live Client", True, "reachable; in-game data available")
+    except Exception as exc:
+        add("League Live Client", False, "%s: not reachable; normal unless you are in an active game" % type(exc).__name__)
+
+    add("Claude / LLM", True, "not required; only used with --claude and ANTHROPIC_API_KEY")
+    add("Safety posture", True, "read-only local Riot API; no memory reads, hooks, injection, or packet sniffing")
+
+    print("Rift Coach doctor")
+    hard_fail = False
+    for name, ok, detail in rows:
+        mark = "OK" if ok else "WARN"
+        print("[%s] %-24s %s" % (mark, name, detail))
+        if not ok and name in ("Python", "Tkinter / overlay UI", "Riot Data Dragon"):
+            hard_fail = True
+    if hard_fail:
+        print("\nDoctor found a required setup issue. Fix WARN rows above, or run without overlay/voice where noted.")
+        return 1
+    print("\nDoctor complete. If League Live Client warns while out of game, that is expected.")
+    return 0
+
+
 def build_arg_parser():
     parser = argparse.ArgumentParser(description="Rift Coach - live League coaching companion")
+    parser.add_argument("--doctor", action="store_true", help="run setup checks and exit")
     parser.add_argument("--demo", action="store_true", help="run a simulated game")
     parser.add_argument("--speed", type=float, default=10, help="demo/replay speed multiplier")
     parser.add_argument("--no-voice", action="store_true", help="print callouts only")
@@ -922,6 +1353,8 @@ def build_arg_parser():
 
 def main(argv=None):
     args = build_arg_parser().parse_args(argv)
+    if args.doctor:
+        return doctor_check()
     if args.demo and args.replay:
         raise SystemExit("Use either --demo or --replay, not both.")
     stop = threading.Event()
@@ -976,4 +1409,4 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
