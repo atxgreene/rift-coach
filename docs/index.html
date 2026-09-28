@@ -63,10 +63,7 @@
     .mockup-img { display: block; width: 100%; border-radius: 18px; border: 1px solid rgba(200,170,110,.35); box-shadow: 0 24px 60px rgba(0,0,0,.35); margin-top: 18px; }
     .banner-strip { margin-top: 18px; border-radius: 24px; border: 1px solid rgba(200,170,110,.28); overflow: hidden; box-shadow: var(--shadow); background: #070b12; }
     .banner-strip img { display: block; width: 100%; }
-    .asset-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 18px; }
-    .asset-tile { background: rgba(13,24,40,.72); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
-    .asset-tile img { width: 100%; aspect-ratio: 16 / 10; object-fit: cover; display: block; }
-    .asset-tile span { display: block; padding: 10px 12px; color: var(--muted); font-size: 13px; }
+
     .hud { position: relative; z-index: 1; display: grid; gap: 10px; }
     .hud-row { display: flex; justify-content: space-between; align-items: center; background: rgba(5,8,13,.72); border: 1px solid rgba(35,57,87,.9); border-radius: 14px; padding: 12px 14px; }
     .hud-label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .14em; }
@@ -79,12 +76,12 @@
     .card b { display: block; color: var(--gold-2); margin-bottom: 8px; }
     .code { background: #03070d; border: 1px solid #1d314c; border-radius: 18px; padding: 18px; overflow: auto; color: #d7e4f5; box-shadow: inset 0 1px 0 rgba(255,255,255,.03); }
     code { font-family: Consolas, ui-monospace, monospace; }
-    .asset-board { display: grid; grid-template-columns: .8fr 1.2fr; gap: 20px; align-items: stretch; }
-    .upload-slot { border: 1px dashed rgba(200,170,110,.5); border-radius: 22px; background: rgba(200,170,110,.05); padding: 22px; color: var(--muted); }
+    .final-cta { text-align: center; background: rgba(13,24,40,.62); border: 1px solid rgba(200,170,110,.32); border-radius: 24px; padding: 34px; box-shadow: var(--shadow); }
+    .final-cta p { max-width: 680px; margin: 0 auto 22px; }
     footer { border-top: 1px solid rgba(35,57,87,.75); margin-top: 48px; padding: 24px 0 38px; color: var(--muted); font-size: 14px; }
     @media (max-width: 860px) {
-      .hero, .asset-board { grid-template-columns: 1fr; }
-      .grid, .asset-grid { grid-template-columns: 1fr; }
+      .hero { grid-template-columns: 1fr; }
+      .grid { grid-template-columns: 1fr; }
       .nav-links { display: none; }
       .hero { padding-top: 32px; }
     }
@@ -97,7 +94,6 @@
       <div class="nav-links">
         <a href="#safety">Safety</a>
         <a href="#install">Install</a>
-        <a href="#brand">Brand kit</a>
         <a class="pill" href="https://github.com/atxgreene/rift-coach">GitHub</a>
       </div>
     </nav>
@@ -149,18 +145,13 @@
       <p>Macro Goblin reads the local Live Client endpoint available during a match and static Data Dragon metadata. The overlay is a normal topmost OS window. The web dashboard binds to localhost only.</p>
     </section>
 
-    <section id="brand" class="wrap section asset-board">
-      <div>
-        <h2>Brand kit next pass</h2>
-        <p>Upload generated assets and this page can graduate from prototype to launch-quality. Prioritize expressive but clean goblin imagery and a few actual product screenshots.</p>
-      </div>
-      <div class="upload-slot">
-        <strong>Generated and wired:</strong><br>
-        mascot hero, social banner, overlay mockup, README hero, app icons, SVG favicon, background texture, and sticker set.
-        <div class="asset-grid">
-          <div class="asset-tile"><img src="assets/readme-hero.png" alt="README hero asset"><span>README hero</span></div>
-          <div class="asset-tile"><img src="assets/sticker-sheet.png" alt="Macro Goblin sticker sheet"><span>Sticker sheet</span></div>
-          <div class="asset-tile"><img src="assets/app-icon-512.png" alt="Macro Goblin app icon"><span>App icon</span></div>
+    <section class="wrap section">
+      <div class="final-cta">
+        <h2>Queue with the goblin.</h2>
+        <p>Run the doctor, start the overlay before queue, and keep the card where it helps without covering the fight.</p>
+        <div class="actions" style="justify-content:center">
+          <a class="button primary" href="https://github.com/atxgreene/rift-coach">Get Macro Goblin</a>
+          <a class="button secondary" href="#install">See install commands</a>
         </div>
       </div>
     </section>
