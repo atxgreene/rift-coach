@@ -37,7 +37,7 @@ PAGE = """<!DOCTYPE html>
 </head>
 <body>
 <main>
-  <div class="brand"><img src="/assets/app-icon-128.png" alt="Macro Goblin logo"><h1>MACRO GOBLIN</h1></div>
+  <div class="brand"><img src="/assets/live-mark-128.png" alt="Macro Goblin logo"><h1>MACRO GOBLIN</h1></div>
   <div class="clock" id="clock">READY</div>
   <p class="muted" id="who">Queue up</p>
   <table id="timers"></table>

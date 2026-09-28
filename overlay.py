@@ -39,22 +39,23 @@ HOTKEY_MOVE_ID = 0x4D10
 # Back-compat for the smoke test.
 HOTKEY_ID = HOTKEY_HIDE_ID
 
-# Riot-inspired palette: dark slate panels, thin gold accents, restrained status colors.
+# Macro Goblin HUD palette: dark map glass, thin gold/teal linework, restrained status colors.
 TRANSPARENT = "magenta"
 BG = "#05080d"
-PANEL = "#0b1420"
-PANEL_2 = "#101b2b"
-PANEL_3 = "#07101a"
+PANEL = "#07111d"
+PANEL_2 = "#0b1a2b"
+PANEL_3 = "#091522"
 GOLD = "#c8aa6e"
 GOLD_BRIGHT = "#f0d58c"
 TEXT = "#f0e6d2"
-MUTED = "#8a93a5"
+MUTED = "#9aa6b8"
 BLUE = "#3fb7d8"
 UP = "#7bd88f"
 SOON = "#f0b45a"
 DOWN = "#d86b6b"
 TRACK = "#1e2a3d"
-WARN_BG = "#24140c"
+WARN_BG = "#091522"
+LINE = "#17324a"
 
 user32 = ctypes.windll.user32
 
@@ -194,14 +195,21 @@ def split_shop(lines):
 
 
 def pack_section(parent, title, scale, tk, tkfont):
-    frame = tk.Frame(parent, bg=PANEL, highlightbackground="#1d314c", highlightthickness=1)
-    frame.pack(fill="x", pady=(0, int(7 * scale)))
+    frame = tk.Frame(parent, bg=BG)
+    frame.pack(fill="x", pady=(0, int(8 * scale)))
+    title_row = tk.Frame(frame, bg=BG)
+    title_row.pack(fill="x")
     tk.Label(
-        frame, text=title, bg=PANEL_3, fg=GOLD, font=tkfont.Font(family="Segoe UI", size=max(7, int(8 * scale)), weight="bold"),
-        anchor="w", padx=7, pady=2,
-    ).pack(fill="x")
-    body = tk.Frame(frame, bg=PANEL, padx=7, pady=5)
-    body.pack(fill="x")
+        title_row, text="◆", bg=BG, fg=GOLD, font=tkfont.Font(family="Segoe UI", size=max(7, int(8 * scale)), weight="bold"),
+        anchor="w",
+    ).pack(side="left", padx=(0, 4))
+    tk.Label(
+        title_row, text=title, bg=BG, fg=MUTED, font=tkfont.Font(family="Segoe UI", size=max(7, int(8 * scale)), weight="bold"),
+        anchor="w",
+    ).pack(side="left")
+    tk.Frame(frame, bg=GOLD, height=1).pack(fill="x", pady=(2, 0))
+    body = tk.Frame(frame, bg=PANEL, padx=8, pady=6, highlightbackground=LINE, highlightthickness=1)
+    body.pack(fill="x", pady=(0, 0))
     return body
 
 
@@ -212,7 +220,7 @@ def run(bus, stop, edit=False):
     layout = load_layout()
     scale = float(layout.get("scale", 1.0))
     width = int(layout["w"] * scale)
-    height = int(604 * scale)
+    height = int(612 * scale)
     fade = CONFIG["overlay"].get("callout_fade_seconds", 12)
 
     root = tk.Tk()
@@ -244,6 +252,8 @@ def run(bus, stop, edit=False):
     app_icon = None
     header_icon = None
     icon_candidates = (
+        os.path.join(ROOT, "assets", "live-mark-512.png"),
+        os.path.join(ROOT, "assets", "live-mark-headset-pin.png"),
         os.path.join(ROOT, "assets", "app-icon-512.png"),
         os.path.join(ROOT, "assets", "macro-goblin-icon.png"),
         os.path.join(ROOT, "assets", "mascot-transparent.png"),
@@ -260,16 +270,17 @@ def run(bus, stop, edit=False):
             app_icon = None
     if app_icon is not None:
         try:
-            # The brand-kit icon is 512px; 16x subsampling gives a crisp 32px header mark.
-            header_icon = app_icon.subsample(16, 16)
+            # 512px live mark; 13x gives a crisp ~39px header mark.
+            div = 13 if app_icon.width() >= 500 else max(1, app_icon.width() // 38)
+            header_icon = app_icon.subsample(div, div)
             image_refs.append(header_icon)
         except tk.TclError:
             header_icon = None
 
     shell = tk.Frame(root, bg=BG, highlightbackground=GOLD, highlightthickness=1)
     shell.pack(fill="both", expand=True)
-    tk.Frame(shell, bg=GOLD, height=2).pack(fill="x")
-    panel = tk.Frame(shell, bg=BG, padx=9, pady=8)
+    tk.Frame(shell, bg=GOLD, height=1).pack(fill="x")
+    panel = tk.Frame(shell, bg=BG, padx=10, pady=8)
     panel.pack(fill="both", expand=True)
 
     move_mode = {"value": bool(edit)}
@@ -280,28 +291,34 @@ def run(bus, stop, edit=False):
     header = tk.Frame(panel, bg=BG)
     header.pack(fill="x")
     if header_icon is not None:
-        tk.Label(header, image=header_icon, bg=BG).pack(side="left", padx=(0, 6))
-    tk.Label(header, text="MACRO GOBLIN", bg=BG, fg=GOLD_BRIGHT, font=title_font, anchor="w").pack(side="left")
-    mode_label = tk.Label(header, text="MOVE" if edit else "LIVE", bg=BG, fg=SOON if edit else BLUE, font=tiny_font, anchor="e")
+        tk.Label(header, image=header_icon, bg=BG).pack(side="left", padx=(0, 7))
+    brand_stack = tk.Frame(header, bg=BG)
+    brand_stack.pack(side="left")
+    tk.Label(brand_stack, text="Macro Goblin", bg=BG, fg=GOLD_BRIGHT, font=tkfont.Font(family=family, size=max(10, int(12 * scale)), weight="bold"), anchor="w").pack(anchor="w")
+    tk.Label(brand_stack, text="SMALL DECISIONS. BIG WINS.", bg=BG, fg=MUTED, font=tiny_font, anchor="w").pack(anchor="w")
+    mode_label = tk.Label(header, text="● LIVE" if not edit else "● MOVE", bg=BG, fg=UP if not edit else SOON, font=tiny_font, anchor="e", padx=8, pady=3, highlightbackground=LINE, highlightthickness=1)
     mode_label.pack(side="right")
 
     clock_row = tk.Frame(panel, bg=BG)
     clock_row.pack(fill="x", pady=(1, 5))
     clock = tk.Label(clock_row, text="READY", bg=BG, fg=TEXT, font=mono_font, anchor="w")
     clock.pack(side="left")
-    hotkey_hint = tk.Label(clock_row, text="Ctrl+Shift+M move", bg=BG, fg=MUTED, font=tiny_font, anchor="e")
+    hotkey_hint = tk.Label(clock_row, text="Ctrl+Shift+M move", bg=BG, fg=BLUE, font=tiny_font, anchor="e")
     hotkey_hint.pack(side="right")
 
     who = tk.Label(panel, text="Queue up. Borderless.", bg=BG, fg=MUTED, font=body_font, anchor="w")
     who.pack(fill="x", pady=(0, 7))
 
-    alert_box = tk.Frame(panel, bg=WARN_BG, highlightbackground="#5c371e", highlightthickness=1)
+    alert_box = tk.Frame(panel, bg=WARN_BG, highlightbackground=LINE, highlightthickness=1)
     alert_box.pack(fill="x", pady=(0, 7))
-    alert_title = tk.Label(alert_box, text="FOCUS", bg=WARN_BG, fg=GOLD, font=tiny_font, anchor="w", padx=7, pady=2)
-    alert_title.pack(fill="x")
+    focus_header = tk.Frame(alert_box, bg=WARN_BG)
+    focus_header.pack(fill="x")
+    tk.Label(focus_header, text="◎", bg=WARN_BG, fg=GOLD_BRIGHT, font=body_font, anchor="w", padx=7, pady=2).pack(side="left")
+    alert_title = tk.Label(focus_header, text="FOCUS", bg=WARN_BG, fg=MUTED, font=tiny_font, anchor="w", pady=2)
+    alert_title.pack(side="left")
     alert_label = tk.Label(
         alert_box, text="Waiting for live game data", bg=WARN_BG, fg=TEXT, font=bold_font,
-        anchor="w", justify="left", wraplength=width - 28, padx=7, pady=5,
+        anchor="w", justify="left", wraplength=width - 28, padx=9, pady=6,
     )
     alert_label.pack(fill="x")
 
@@ -364,7 +381,7 @@ def run(bus, stop, edit=False):
 
     def set_move_mode(value):
         move_mode["value"] = bool(value)
-        mode_label.configure(text="MOVE" if move_mode["value"] else "LIVE", fg=SOON if move_mode["value"] else BLUE)
+        mode_label.configure(text="● MOVE" if move_mode["value"] else "● LIVE", fg=SOON if move_mode["value"] else UP)
         hotkey_hint.configure(text="Drag card; saved" if move_mode["value"] else "Ctrl+Shift+M move")
         apply_style()
         if not move_mode["value"]:

@@ -41,5 +41,10 @@ Examples:
 - `assets/favicon.svg` and `assets/favicon-mark.png` — site favicon sources
 - `assets/brand-bg-texture.png` — low-contrast page background texture
 - `assets/sticker-*.png` and `assets/sticker-sheet.png` — sticker/personality pack
+- `assets/live-mark-headset-pin.png` — simplified live overlay/app mark used first by the program
+- `assets/concept-map-texture.png` — dark map/grid visual reference
+- `assets/overlay-concept-full-card.png` and `assets/overlay-concept-minimal-hud.png` — live overlay UX/style references
+- `assets/mascot-live-transparent.png` and `assets/mascot-portrait-ring.png` — additional mascot/live branding options
+- `assets/brand-hero-concept.png` and `assets/sticker-sheet-concept.png` — extended brand concept art
 
-The uploaded brand-kit assets are original Macro Goblin artwork. Do not use Riot, League, or champion marks in project branding. Public GitHub Pages mirrors these under `docs/assets/`.
+The uploaded brand-kit assets are original Macro Goblin artwork. Do not use Riot, League, or champion marks in project branding. Public GitHub Pages mirrors only the public-facing site assets under `docs/assets/`; internal overlay concepts stay in app `assets/` unless intentionally published.
