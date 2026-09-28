@@ -10,7 +10,8 @@ if errorlevel 1 (
 echo.
 echo  Macro Goblin
 echo  League must be Borderless, not exclusive Fullscreen.
-echo  Hide the overlay with Ctrl+Shift+O.
+echo  Drag the Macro Goblin card anywhere on the second screen.
+echo  Ctrl+Shift+M locks/unlocks click-through. Ctrl+Shift+O hides it.
 echo  This launch records the match locally. Nothing is uploaded.
 echo.
 python "%~dp0lol_coach.py" --overlay --capture --log %*

@@ -113,14 +113,14 @@ def top_hwnd(widget):
 
 
 def apply_exstyle(hwnd, click_through):
-    flags = WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE
+    flags = WS_EX_LAYERED | WS_EX_TOOLWINDOW
     if click_through:
-        flags |= WS_EX_TRANSPARENT
+        flags |= WS_EX_TRANSPARENT | WS_EX_NOACTIVATE
     style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
     # Clear/restore transparent each time so move mode can grab the card.
-    style = (style | WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE) & ~WS_EX_TRANSPARENT
+    style = (style | WS_EX_LAYERED | WS_EX_TOOLWINDOW) & ~(WS_EX_TRANSPARENT | WS_EX_NOACTIVATE)
     if click_through:
-        style |= WS_EX_TRANSPARENT
+        style |= WS_EX_TRANSPARENT | WS_EX_NOACTIVATE
     user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style | flags)
     user32.SetWindowPos(
         hwnd, HWND_TOPMOST, 0, 0, 0, 0,
@@ -208,7 +208,7 @@ def pack_section(parent, title, scale, tk, tkfont):
         anchor="w",
     ).pack(side="left")
     tk.Frame(frame, bg=GOLD, height=1).pack(fill="x", pady=(2, 0))
-    body = tk.Frame(frame, bg=PANEL, padx=8, pady=6, highlightbackground=LINE, highlightthickness=1)
+    body = tk.Frame(frame, bg=BG, padx=4, pady=5)
     body.pack(fill="x", pady=(0, 0))
     return body
 
@@ -220,7 +220,7 @@ def run(bus, stop, edit=False):
     layout = load_layout()
     scale = float(layout.get("scale", 1.0))
     width = int(layout["w"] * scale)
-    height = int(612 * scale)
+    height = int(548 * scale)
     fade = CONFIG["overlay"].get("callout_fade_seconds", 12)
 
     root = tk.Tk()
@@ -283,7 +283,9 @@ def run(bus, stop, edit=False):
     panel = tk.Frame(shell, bg=BG, padx=10, pady=8)
     panel.pack(fill="both", expand=True)
 
-    move_mode = {"value": bool(edit)}
+    # Default to a movable floating companion window. Ctrl+Shift+M locks it
+    # into click-through mode when placing it over the game.
+    move_mode = {"value": bool(edit) or not CONFIG["overlay"].get("start_locked", False)}
     hidden = {"value": False}
     drag = {"x": 0, "y": 0}
     ticks = {"n": 0}
@@ -296,80 +298,81 @@ def run(bus, stop, edit=False):
     brand_stack.pack(side="left")
     tk.Label(brand_stack, text="Macro Goblin", bg=BG, fg=GOLD_BRIGHT, font=tkfont.Font(family=family, size=max(10, int(12 * scale)), weight="bold"), anchor="w").pack(anchor="w")
     tk.Label(brand_stack, text="SMALL DECISIONS. BIG WINS.", bg=BG, fg=MUTED, font=tiny_font, anchor="w").pack(anchor="w")
-    mode_label = tk.Label(header, text="● LIVE" if not edit else "● MOVE", bg=BG, fg=UP if not edit else SOON, font=tiny_font, anchor="e", padx=8, pady=3, highlightbackground=LINE, highlightthickness=1)
+    mode_label = tk.Label(header, text="● FLOAT" if move_mode["value"] else "● LOCKED", bg=BG, fg=SOON if move_mode["value"] else UP, font=tiny_font, anchor="e", padx=8, pady=3, highlightbackground=LINE, highlightthickness=1)
     mode_label.pack(side="right")
 
     clock_row = tk.Frame(panel, bg=BG)
     clock_row.pack(fill="x", pady=(1, 5))
     clock = tk.Label(clock_row, text="READY", bg=BG, fg=TEXT, font=mono_font, anchor="w")
     clock.pack(side="left")
-    hotkey_hint = tk.Label(clock_row, text="Ctrl+Shift+M move", bg=BG, fg=BLUE, font=tiny_font, anchor="e")
+    hotkey_hint = tk.Label(clock_row, text="Drag anywhere • Ctrl+Shift+M lock", bg=BG, fg=BLUE, font=tiny_font, anchor="e")
     hotkey_hint.pack(side="right")
 
-    who = tk.Label(panel, text="Queue up. Borderless.", bg=BG, fg=MUTED, font=body_font, anchor="w")
-    who.pack(fill="x", pady=(0, 7))
+    who = tk.Label(panel, text="Queue up. Borderless.", bg=BG, fg=MUTED, font=tiny_font, anchor="w")
+    who.pack(fill="x", pady=(0, 5))
 
-    alert_box = tk.Frame(panel, bg=WARN_BG, highlightbackground=LINE, highlightthickness=1)
-    alert_box.pack(fill="x", pady=(0, 7))
-    focus_header = tk.Frame(alert_box, bg=WARN_BG)
+    alert_box = tk.Frame(panel, bg=BG)
+    alert_box.pack(fill="x", pady=(0, 8))
+    focus_header = tk.Frame(alert_box, bg=BG)
     focus_header.pack(fill="x")
-    tk.Label(focus_header, text="◎", bg=WARN_BG, fg=GOLD_BRIGHT, font=body_font, anchor="w", padx=7, pady=2).pack(side="left")
-    alert_title = tk.Label(focus_header, text="FOCUS", bg=WARN_BG, fg=MUTED, font=tiny_font, anchor="w", pady=2)
+    tk.Label(focus_header, text="◎", bg=BG, fg=GOLD_BRIGHT, font=body_font, anchor="w", padx=(0, 5), pady=1).pack(side="left")
+    alert_title = tk.Label(focus_header, text="FOCUS", bg=BG, fg=MUTED, font=tiny_font, anchor="w", pady=1)
     alert_title.pack(side="left")
+    tk.Frame(alert_box, bg=LINE, height=1).pack(fill="x", pady=(1, 1))
     alert_label = tk.Label(
-        alert_box, text="Waiting for live game data", bg=WARN_BG, fg=TEXT, font=bold_font,
-        anchor="w", justify="left", wraplength=width - 28, padx=9, pady=6,
+        alert_box, text="Waiting for live game data", bg=BG, fg=TEXT, font=bold_font,
+        anchor="w", justify="left", wraplength=width - 28, padx=2, pady=4,
     )
     alert_label.pack(fill="x")
 
     obj_body = pack_section(panel, "NEXT OBJECTIVE", scale, tk, tkfont)
-    obj_top = tk.Frame(obj_body, bg=PANEL)
+    obj_top = tk.Frame(obj_body, bg=BG)
     obj_top.pack(fill="x")
-    obj_name = tk.Label(obj_top, text="QUEUE", bg=PANEL, fg=GOLD_BRIGHT, font=bold_font, anchor="w")
+    obj_name = tk.Label(obj_top, text="QUEUE", bg=BG, fg=GOLD_BRIGHT, font=bold_font, anchor="w")
     obj_name.pack(side="left")
-    obj_time = tk.Label(obj_top, text="--", bg=PANEL, fg=MUTED, font=mono_font, anchor="e")
+    obj_time = tk.Label(obj_top, text="--", bg=BG, fg=MUTED, font=mono_font, anchor="e")
     obj_time.pack(side="right")
     timer_labels = {}
     name_labels = {}
-    grid = tk.Frame(obj_body, bg=PANEL)
-    grid.pack(fill="x", pady=(4, 0))
+    grid = tk.Frame(obj_body, bg=BG)
+    grid.pack(fill="x", pady=(3, 0))
     for idx, (key, title) in enumerate((('dragon', 'DRG'), ('baron', 'BAR'), ('grubs', 'GRB'), ('herald', 'HER'))):
-        cell = tk.Frame(grid, bg=PANEL_2, padx=5, pady=3)
+        cell = tk.Frame(grid, bg=BG, padx=2, pady=1)
         cell.grid(row=0, column=idx, padx=(0 if idx == 0 else 3, 0), sticky="ew")
         grid.columnconfigure(idx, weight=1)
-        name = tk.Label(cell, text=title, bg=PANEL_2, fg=MUTED, font=tiny_font)
+        name = tk.Label(cell, text=title, bg=BG, fg=MUTED, font=tiny_font)
         name.pack()
-        lbl = tk.Label(cell, text="--", bg=PANEL_2, fg=MUTED, font=small_mono)
+        lbl = tk.Label(cell, text="--", bg=BG, fg=MUTED, font=small_mono)
         lbl.pack()
         timer_labels[key] = lbl
         name_labels[key] = name
 
     metrics_body = pack_section(panel, "LANE STATE", scale, tk, tkfont)
-    metric_row = tk.Frame(metrics_body, bg=PANEL)
+    metric_row = tk.Frame(metrics_body, bg=BG)
     metric_row.pack(fill="x")
-    gold_label = tk.Label(metric_row, text="Gold --", bg=PANEL, fg=MUTED, font=body_font, anchor="w")
+    gold_label = tk.Label(metric_row, text="Gold --", bg=BG, fg=MUTED, font=body_font, anchor="w")
     gold_label.grid(row=0, column=0, sticky="w")
-    cs_label = tk.Label(metric_row, text="CS --", bg=PANEL, fg=MUTED, font=body_font, anchor="e")
+    cs_label = tk.Label(metric_row, text="CS --", bg=BG, fg=MUTED, font=body_font, anchor="e")
     cs_label.grid(row=0, column=1, sticky="e")
     metric_row.columnconfigure(0, weight=1)
     metric_row.columnconfigure(1, weight=1)
-    gold_canvas = tk.Canvas(metrics_body, width=width - 36, height=int(9 * scale), bg=PANEL, highlightthickness=0)
+    gold_canvas = tk.Canvas(metrics_body, width=width - 36, height=int(7 * scale), bg=BG, highlightthickness=0)
     gold_canvas.pack(fill="x", pady=(5, 0))
 
     shop_body = pack_section(panel, "ITEM PLAN", scale, tk, tkfont)
-    shop_next = tk.Label(shop_body, text="", bg=PANEL, fg=GOLD_BRIGHT, font=bold_font, anchor="w", justify="left", wraplength=width - 34)
+    shop_next = tk.Label(shop_body, text="", bg=BG, fg=GOLD_BRIGHT, font=bold_font, anchor="w", justify="left", wraplength=width - 34)
     shop_next.pack(fill="x")
-    shop_later = tk.Label(shop_body, text="", bg=PANEL, fg=MUTED, font=tiny_font, anchor="w", justify="left", wraplength=width - 34)
+    shop_later = tk.Label(shop_body, text="", bg=BG, fg=MUTED, font=tiny_font, anchor="w", justify="left", wraplength=width - 34)
     shop_later.pack(fill="x", pady=(3, 0))
 
     calls_body = pack_section(panel, "RECENT CALLS", scale, tk, tkfont)
     callout_labels = []
-    for _ in range(3):
-        lbl = tk.Label(calls_body, text="", bg=PANEL, fg=TEXT, font=tiny_font, anchor="w", justify="left", wraplength=width - 34)
+    for _ in range(2):
+        lbl = tk.Label(calls_body, text="", bg=BG, fg=TEXT, font=tiny_font, anchor="w", justify="left", wraplength=width - 34)
         lbl.pack(fill="x")
         callout_labels.append(lbl)
 
-    footer = tk.Label(panel, text="Ctrl+Shift+O hide • Ctrl+Shift+M move/save", bg=BG, fg=MUTED, font=tiny_font, anchor="center")
+    footer = tk.Label(panel, text="drag anywhere • Ctrl+Shift+M lock/click-through", bg=BG, fg=MUTED, font=tiny_font, anchor="center")
     footer.pack(fill="x", side="bottom")
 
     def apply_style():
@@ -381,8 +384,8 @@ def run(bus, stop, edit=False):
 
     def set_move_mode(value):
         move_mode["value"] = bool(value)
-        mode_label.configure(text="● MOVE" if move_mode["value"] else "● LIVE", fg=SOON if move_mode["value"] else UP)
-        hotkey_hint.configure(text="Drag card; saved" if move_mode["value"] else "Ctrl+Shift+M move")
+        mode_label.configure(text="● FLOAT" if move_mode["value"] else "● LOCKED", fg=SOON if move_mode["value"] else UP)
+        hotkey_hint.configure(text="Drag anywhere • Ctrl+Shift+M lock" if move_mode["value"] else "Click-through • Ctrl+Shift+M float")
         apply_style()
         if not move_mode["value"]:
             save_layout(layout["key"], root.winfo_x(), root.winfo_y(), width=int(layout["w"]), scale=scale)

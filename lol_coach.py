@@ -75,8 +75,8 @@ CONFIG = {
         "hotkey": "ctrl+shift+o",
         "callout_fade_seconds": 12,
         "layouts": {
-            "1080p": {"x": 1936, "y": -95, "w": 320, "scale": 1.0, "opacity": 0.94},
-            "1440p": {"x": 20, "y": 180, "w": 320, "scale": 1.15, "opacity": 0.94},
+            "1080p": {"x": 1936, "y": -95, "w": 300, "scale": 1.0, "opacity": 0.94},
+            "1440p": {"x": 20, "y": 180, "w": 300, "scale": 1.15, "opacity": 0.94},
         },
     },
 }
@@ -1343,7 +1343,7 @@ def build_arg_parser():
     parser.add_argument("--claude", action="store_true", help="add Claude tips (needs ANTHROPIC_API_KEY)")
     parser.add_argument("--capture", action="store_true", help="write raw polls to captures/<timestamp>/")
     parser.add_argument("--replay", metavar="DIR", help="replay a captures/<timestamp> directory")
-    parser.add_argument("--overlay", action="store_true", help="click-through overlay window")
+    parser.add_argument("--overlay", action="store_true", help="floating overlay window; Ctrl+Shift+M toggles click-through lock")
     parser.add_argument("--overlay-edit", action="store_true", help="drag the overlay and save its position")
     parser.add_argument("--web", action="store_true", help="serve panels on 127.0.0.1:8765 only")
     parser.add_argument("--log", action="store_true", help="append callouts to logs/")
