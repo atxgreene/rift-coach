@@ -315,7 +315,7 @@ def run(bus, stop, edit=False):
     alert_box.pack(fill="x", pady=(0, 8))
     focus_header = tk.Frame(alert_box, bg=BG)
     focus_header.pack(fill="x")
-    tk.Label(focus_header, text="◎", bg=BG, fg=GOLD_BRIGHT, font=body_font, anchor="w", padx=(0, 5), pady=1).pack(side="left")
+    tk.Label(focus_header, text="◎", bg=BG, fg=GOLD_BRIGHT, font=body_font, anchor="w", padx=0, pady=1).pack(side="left", padx=(0, 5))
     alert_title = tk.Label(focus_header, text="FOCUS", bg=BG, fg=MUTED, font=tiny_font, anchor="w", pady=1)
     alert_title.pack(side="left")
     tk.Frame(alert_box, bg=LINE, height=1).pack(fill="x", pady=(1, 1))
