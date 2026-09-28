@@ -1,9 +1,14 @@
 """Local-only second-screen dashboard. Binds to 127.0.0.1, never the LAN."""
 
 import json
+import mimetypes
+import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlparse
 
 import lol_coach
+
+ROOT = lol_coach.ROOT
 
 PAGE = """<!DOCTYPE html>
 <html lang="en">
@@ -11,9 +16,11 @@ PAGE = """<!DOCTYPE html>
 <meta charset="utf-8">
 <title>Macro Goblin</title>
 <style>
-  body { margin: 0; background: #0e1116; color: #e7e5e4; font: 15px Segoe UI, sans-serif; }
-  main { max-width: 420px; margin: 24px auto; background: #141820; padding: 16px 18px; }
-  h1 { font-size: 12px; letter-spacing: 0.12em; color: #8b909a; margin: 0; }
+  body { margin: 0; background: #05080d; color: #f0e6d2; font: 15px Segoe UI, sans-serif; }
+  main { max-width: 420px; margin: 24px auto; background: #0d1828; border: 1px solid #233957; padding: 16px 18px; }
+  .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+  .brand img { width: 34px; height: 34px; border-radius: 50%; box-shadow: 0 0 18px rgba(63,183,216,.35); }
+  h1 { font-size: 12px; letter-spacing: 0.12em; color: #f0d58c; margin: 0; }
   .clock { font: 22px Consolas, monospace; margin: 4px 0 12px; }
   table { width: 100%; border-collapse: collapse; }
   td { padding: 3px 0; }
@@ -30,7 +37,7 @@ PAGE = """<!DOCTYPE html>
 </head>
 <body>
 <main>
-  <h1>MACRO GOBLIN</h1>
+  <div class="brand"><img src="/assets/app-icon-128.png" alt="Macro Goblin logo"><h1>MACRO GOBLIN</h1></div>
   <div class="clock" id="clock">READY</div>
   <p class="muted" id="who">Queue up</p>
   <table id="timers"></table>
@@ -101,6 +108,24 @@ setInterval(tick, 1000);
 def make_handler(bus):
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
+            parsed = urlparse(self.path)
+            if parsed.path.startswith("/assets/"):
+                name = os.path.basename(parsed.path)
+                path = os.path.join(ROOT, "assets", name)
+                asset_root = os.path.abspath(os.path.join(ROOT, "assets"))
+                path_abs = os.path.abspath(path)
+                if not path_abs.startswith(asset_root + os.sep) or not os.path.exists(path_abs):
+                    self.send_error(404)
+                    return
+                content_type = mimetypes.guess_type(path_abs)[0] or "application/octet-stream"
+                with open(path_abs, "rb") as handle:
+                    body = handle.read()
+                self.send_response(200)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Cache-Control", "public, max-age=3600")
+                self.end_headers()
+                self.wfile.write(body)
+                return
             if self.path.startswith("/state"):
                 body = json.dumps(bus.snapshot()).encode("utf-8")
                 self.send_response(200)

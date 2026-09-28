@@ -222,6 +222,7 @@ class CoachTests(unittest.TestCase):
         thread = threading.Thread(target=web_dash.serve, args=(bus, stop, "127.0.0.1", port), daemon=True)
         thread.start()
         try:
+            import urllib.error
             import urllib.request
             deadline = time.time() + 3
             body = None
@@ -233,6 +234,13 @@ class CoachTests(unittest.TestCase):
                 except OSError:
                     time.sleep(0.05)
             self.assertEqual(body, {"ok": True, "t": 12})
+            with urllib.request.urlopen("http://127.0.0.1:%d/assets/app-icon-128.png" % port, timeout=1) as response:
+                self.assertEqual(response.status, 200)
+                self.assertEqual(response.headers.get_content_type(), "image/png")
+                self.assertGreater(len(response.read()), 1000)
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                urllib.request.urlopen("http://127.0.0.1:%d/assets/../lol_coach.py" % port, timeout=1).read()
+            self.assertEqual(ctx.exception.code, 404)
         finally:
             stop.set()
             try:

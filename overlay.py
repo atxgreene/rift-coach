@@ -242,14 +242,29 @@ def run(bus, stop, edit=False):
 
     image_refs = []
     app_icon = None
-    icon_path = os.path.join(ROOT, "assets", "macro-goblin-icon.png")
-    if os.path.exists(icon_path):
+    header_icon = None
+    icon_candidates = (
+        os.path.join(ROOT, "assets", "app-icon-512.png"),
+        os.path.join(ROOT, "assets", "macro-goblin-icon.png"),
+        os.path.join(ROOT, "assets", "mascot-transparent.png"),
+    )
+    for icon_path in icon_candidates:
+        if not os.path.exists(icon_path):
+            continue
         try:
             app_icon = tk.PhotoImage(file=icon_path)
             root.iconphoto(True, app_icon)
             image_refs.append(app_icon)
+            break
         except tk.TclError:
             app_icon = None
+    if app_icon is not None:
+        try:
+            # The brand-kit icon is 512px; 16x subsampling gives a crisp 32px header mark.
+            header_icon = app_icon.subsample(16, 16)
+            image_refs.append(header_icon)
+        except tk.TclError:
+            header_icon = None
 
     shell = tk.Frame(root, bg=BG, highlightbackground=GOLD, highlightthickness=1)
     shell.pack(fill="both", expand=True)
@@ -264,13 +279,8 @@ def run(bus, stop, edit=False):
 
     header = tk.Frame(panel, bg=BG)
     header.pack(fill="x")
-    if app_icon is not None:
-        try:
-            header_icon = app_icon.subsample(32, 32)
-            image_refs.append(header_icon)
-            tk.Label(header, image=header_icon, bg=BG).pack(side="left", padx=(0, 6))
-        except tk.TclError:
-            pass
+    if header_icon is not None:
+        tk.Label(header, image=header_icon, bg=BG).pack(side="left", padx=(0, 6))
     tk.Label(header, text="MACRO GOBLIN", bg=BG, fg=GOLD_BRIGHT, font=title_font, anchor="w").pack(side="left")
     mode_label = tk.Label(header, text="MOVE" if edit else "LIVE", bg=BG, fg=SOON if edit else BLUE, font=tiny_font, anchor="e")
     mode_label.pack(side="right")
