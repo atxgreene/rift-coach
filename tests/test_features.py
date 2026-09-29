@@ -53,6 +53,14 @@ class StyleTests(unittest.TestCase):
         self.assertIn("gold banked", voice.quiet)
         self.assertTrue(any(row[1] == "gold banked" for row in coach.recent))  # still on the overlay
 
+    def test_why_is_not_used_up_by_overlay_only_lines(self):
+        coach, voice = coach_with("beginner")
+        coach.tick(frame(10))
+        for _ in range(3):
+            coach.speak("CS low.", lol_coach.P_QUIET, cat="farm", why="Each wave is about 125 gold.")
+        coach.speak("CS low.", lol_coach.P_NORMAL, cat="farm", why="Each wave is about 125 gold.")
+        self.assertEqual(voice.lines[-1], "CS low. Each wave is about 125 gold.")
+
     def test_unknown_style_falls_back(self):
         coach, _voice = coach_with("wizard")
         self.assertEqual(coach.style, "standard")
@@ -118,6 +126,25 @@ class NewCallTests(unittest.TestCase):
         self.assertEqual(voice.lines[-1], before)
         coach.whats_next()
         self.assertTrue(voice.lines[-1].startswith("Dragon in 1:0"), voice.lines[-1])
+
+
+    def test_next_reads_the_item_name_and_cost(self):
+        coach, voice = coach_with()
+        coach.tick(frame(10))
+        coach.shop_lines = ["NEXT Serrated Dirk  1000g  need 350", "LATER Opportunity"]
+        coach.whats_next()
+        self.assertIn("Buy next: Serrated Dirk, 1000 gold.", voice.lines[-1])
+        self.assertNotIn("NEXT", voice.lines[-1])
+
+    def test_hotkeys_only_held_in_a_match(self):
+        session = lol_coach.CoachSession(lol_coach.SessionOptions(voice=False))
+        self.assertFalse(session.in_game())
+        coach, _voice = coach_with()
+        session.coach = coach
+        coach.tick(frame(10))
+        self.assertTrue(session.in_game())
+        coach.game_over = True
+        self.assertFalse(session.in_game())
 
 
 class ReportCardTests(unittest.TestCase):

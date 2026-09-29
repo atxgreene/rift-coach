@@ -827,13 +827,8 @@ class Coach:
         cat: callout family the player can mute (CATEGORIES). why: a one-sentence reason that
         Beginner style adds the first two times a kind of callout comes up.
         """
-        if why and self.style == "beginner":
-            key = why
-            if self.why_said.get(key, 0) < 2:
-                self.why_said[key] = self.why_said.get(key, 0) + 1
-                text = "%s %s" % (text, why)
-        self.note(text)
         if self.quiet:
+            self.note(text)
             return
         if cat in self.muted:
             priority = P_QUIET
@@ -844,6 +839,11 @@ class Coach:
                 priority = P_QUIET
             else:
                 self.last_low_voice = self.t
+        # The reason is only used up when it is actually heard.
+        if why and self.style == "beginner" and priority > P_QUIET and self.why_said.get(why, 0) < 2:
+            self.why_said[why] = self.why_said.get(why, 0) + 1
+            text = "%s %s" % (text, why)
+        self.note(text)
         if priority > P_QUIET:
             self.voiced += 1
             self.last_voiced = text
@@ -1337,16 +1337,21 @@ class Coach:
     def whats_next(self):
         """Ctrl+Shift+N: next objective, and what to buy next."""
         parts = []
+        spawns, shop_lines = dict(self.spawns), list(self.shop_lines)  # the poll thread may change these
         if self.me:
-            upcoming = sorted((at - self.t, obj) for obj, at in self.spawns.items())
+            upcoming = sorted((at - self.t, obj) for obj, at in spawns.items())
             if upcoming:
                 remain, obj = upcoming[0]
                 label = {"dragon": "Elder" if self.soul_team else "Dragon", "grubs": "Void grubs",
                          "herald": "Herald", "baron": "Baron"}.get(obj, obj)
                 parts.append("%s is up." % label if remain <= 0 else "%s in %s." % (label, fmt_time(remain)))
-            for line in self.shop_lines:
-                if line.upper().startswith("NEXT"):
-                    parts.append("Buy next: %s." % line.split(":", 1)[-1].strip().rstrip("."))
+            for line in shop_lines:
+                if line.startswith("NEXT "):
+                    fields = [f for f in line[5:].split("  ") if f.strip()]
+                    item = fields[0].strip() if fields else ""
+                    cost = fields[1].strip().rstrip("g") if len(fields) > 1 else ""
+                    if item:
+                        parts.append("Buy next: %s%s." % (item, (", %s gold" % cost) if cost.isdigit() else ""))
                     break
         self.say(" ".join(parts) or "No game yet.", priority=P_URGENT, ttl=10)
 
@@ -2284,7 +2289,7 @@ class CoachSession:
         if opts.hotkeys:
             try:
                 import winplat
-                winplat.global_hotkeys(self.on_hotkey, self.stop_event)
+                winplat.global_hotkeys(self.on_hotkey, self.stop_event, active=self.in_game)
             except Exception as exc:
                 print("Hotkeys unavailable (%s)." % exc, flush=True)
         if opts.web:
@@ -2292,6 +2297,11 @@ class CoachSession:
             threading.Thread(target=web_dash.serve, args=(self.bus, self.stop_event),
                              name="coach-web", daemon=True).start()
         return self
+
+    def in_game(self):
+        """Hotkeys are held only during a match, so Ctrl+Shift+R/N work normally in other apps."""
+        coach = self.coach
+        return bool(coach and coach.me and not coach.game_over and not self.stop_event.is_set())
 
     def on_hotkey(self, name):
         if not self.coach:

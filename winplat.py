@@ -147,10 +147,12 @@ def open_url(url):
 HOTKEYS = {"repeat": (0x5210, 0x52, "Ctrl+Shift+R"), "next": (0x4E10, 0x4E, "Ctrl+Shift+N")}
 
 
-def global_hotkeys(on_press, stop, names=("repeat", "next")):
+def global_hotkeys(on_press, stop, names=("repeat", "next"), active=None):
     """Register the named hotkeys on a dedicated thread; call on_press(name) for each press.
 
-    Returns the thread, or None off Windows. Keys that another app already owns are skipped.
+    active(): the keys are held only while it returns True (during a match) and released
+    otherwise. A key that is busy (another app, or a session that is still shutting down)
+    is retried every second. Returns the thread, or None off Windows.
     """
     if not IS_WIN:
         return None
@@ -166,14 +168,26 @@ def global_hotkeys(on_press, stop, names=("repeat", "next")):
     def run():
         msg = wintypes.MSG()
         user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, 0)  # create this thread's queue
-        ids = []
-        for hid, name in by_id.items():
-            if user32.RegisterHotKey(None, hid, mods, HOTKEYS[name][1]):
-                ids.append(hid)
-            else:
-                print("Hotkey %s is already taken by another app." % HOTKEYS[name][2], flush=True)
+        held, warned = set(), set()
+        next_try = 0.0
         try:
             while not stop.is_set():
+                want = active() if active else True
+                now = time.monotonic()
+                if want and len(held) < len(by_id) and now >= next_try:
+                    next_try = now + 1.0
+                    for hid, name in by_id.items():
+                        if hid in held:
+                            continue
+                        if user32.RegisterHotKey(None, hid, mods, HOTKEYS[name][1]):
+                            held.add(hid)
+                        elif hid not in warned:
+                            warned.add(hid)
+                            print("Hotkey %s is in use by another app; retrying." % HOTKEYS[name][2], flush=True)
+                elif not want and held:
+                    for hid in held:
+                        user32.UnregisterHotKey(None, hid)
+                    held.clear()
                 if user32.PeekMessageW(ctypes.byref(msg), None, 0x0312, 0x0312, 1):
                     name = by_id.get(int(msg.wParam))
                     if name:
@@ -184,7 +198,7 @@ def global_hotkeys(on_press, stop, names=("repeat", "next")):
                 else:
                     time.sleep(0.03)
         finally:
-            for hid in ids:
+            for hid in held:
                 user32.UnregisterHotKey(None, hid)
 
     thread = threading.Thread(target=run, name="coach-hotkeys", daemon=True)

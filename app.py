@@ -530,7 +530,7 @@ class LauncherApp:
             return
         self.settings["coach_style"] = key
         self.paint_style()
-        self.save_and_restart()
+        self.apply_live()
 
     def paint_mutes(self):
         muted = [k for k in self.settings.get("muted", []) if k in lol_coach.CATEGORIES]
@@ -560,7 +560,19 @@ class LauncherApp:
             muted.append(key)
         self.settings["muted"] = muted
         self.paint_mutes()
-        self.save_and_restart()
+        self.apply_live()
+
+    def apply_live(self):
+        """Style and mutes change the running coach directly; no restart, nothing re-announced."""
+        settings_store.save(self.settings)
+        coach = self.session.coach if self.session else None
+        if coach is None:
+            self.save_and_restart()
+            return
+        coach.style = self.settings["coach_style"]
+        coach.muted = set(self.settings["muted"])
+        self.session.options.coach_style = coach.style
+        self.session.options.muted = list(coach.muted)
 
     def paint_speeds(self):
         current = int(self.settings.get("voice_rate", 1))

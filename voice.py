@@ -56,6 +56,13 @@ def _data_dir():
         return ROOT
 
 
+def _rel(path, start):
+    try:
+        return os.path.relpath(path, start)
+    except ValueError:  # different drive on Windows
+        return path
+
+
 def piper_exe():
     path = os.path.join(ROOT, "voice", "piper", "piper.exe" if WINDOWS else "piper")
     return path if os.path.isfile(path) else None
@@ -131,19 +138,24 @@ def download(url, dest, sha256, progress=None, opener=urllib.request.urlopen):
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     tmp = dest + ".part"
     digest = hashlib.sha256()
-    with opener(urllib.request.Request(url, headers={"User-Agent": "MacroGoblin"}), timeout=60) as resp:
-        total = int(resp.headers.get("Content-Length") or 0)
-        done = 0
-        with open(tmp, "wb") as out:
-            while True:
-                block = resp.read(1 << 16)
-                if not block:
-                    break
-                out.write(block)
-                digest.update(block)
-                done += len(block)
-                if progress and total:
-                    progress(done / float(total))
+    try:
+        with opener(urllib.request.Request(url, headers={"User-Agent": "MacroGoblin"}), timeout=60) as resp:
+            total = int(resp.headers.get("Content-Length") or 0)
+            done = 0
+            with open(tmp, "wb") as out:
+                while True:
+                    block = resp.read(1 << 16)
+                    if not block:
+                        break
+                    out.write(block)
+                    digest.update(block)
+                    done += len(block)
+                    if progress and total:
+                        progress(done / float(total))
+    except BaseException:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
     if digest.hexdigest() != sha256:
         os.remove(tmp)
         raise ValueError("checksum mismatch for " + os.path.basename(dest))
@@ -188,7 +200,8 @@ class Player:
 
     def __init__(self):
         self.proc = None
-        self._stop = threading.Event()
+        self._stop = threading.Event()  # set once, by stop(): this player never plays again
+        self.playing = False
         self.command = None
         if not WINDOWS:
             for cmd in (["afplay"], ["paplay"], ["aplay", "-q"]):
@@ -201,14 +214,18 @@ class Player:
         return WINDOWS or self.command is not None
 
     def play(self, path):
-        self._stop.clear()
+        if self._stop.is_set():
+            return
         seconds = wav_seconds(path)
         if WINDOWS:
             import winsound
-            winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NODEFAULT)
-            self._stop.wait(seconds + 0.05)
-            if self._stop.is_set():
-                winsound.PlaySound(None, 0)
+            self.playing = True
+            try:
+                winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NODEFAULT)
+                if self._stop.wait(seconds + 0.05):
+                    winsound.PlaySound(None, 0)
+            finally:
+                self.playing = False
             return
         self.proc = subprocess.Popen(self.command + [path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:
@@ -219,11 +236,12 @@ class Player:
     def stop(self):
         self._stop.set()
         if WINDOWS:
-            try:
-                import winsound
-                winsound.PlaySound(None, 0)
-            except Exception:
-                pass
+            if self.playing:  # PlaySound(None) is process-wide; only cut off our own line
+                try:
+                    import winsound
+                    winsound.PlaySound(None, 0)
+                except Exception:
+                    pass
         elif self.proc is not None and self.proc.poll() is None:
             self.proc.kill()
 
@@ -241,7 +259,19 @@ class Studio:
         self.volume = max(0, min(100, int(volume)))
         self.cache = cache_dir or os.path.join(_data_dir(), "cache", "voice")
         os.makedirs(self.cache, exist_ok=True)
-        self.work = tempfile.mkdtemp(prefix="mg-voice-")
+        # Piper reads narrow (ANSI) argv on Windows, so a non-English user name in a path breaks it.
+        # Run it from a work folder near the model and pass every path relative to that folder.
+        work_root = os.path.join(_data_dir(), "cache")
+        try:
+            os.makedirs(work_root, exist_ok=True)
+            for name in os.listdir(work_root):  # left behind by a crash
+                old = os.path.join(work_root, name)
+                if name.startswith("voice-work-") and time.time() - os.path.getmtime(old) > 86400:
+                    shutil.rmtree(old, ignore_errors=True)
+            self.work = tempfile.mkdtemp(prefix="voice-work-", dir=work_root)
+        except OSError:
+            self.work = tempfile.mkdtemp(prefix="mg-voice-")
+        self.warmed = False
         self.proc = None
         self.lock = threading.Lock()
         self.player = Player()
@@ -253,43 +283,64 @@ class Studio:
     def _start(self):
         if self.proc is not None and self.proc.poll() is None:
             return self.proc
-        cmd = [self.exe, "--model", self.model, "--output_dir", self.work,
+        espeak = os.path.join(os.path.dirname(self.exe), "espeak-ng-data")
+        cmd = [_rel(self.exe, self.work), "--model", _rel(self.model, self.work), "--output_dir", ".",
                "--length_scale", str(self.length), "--sentence_silence", "0.1", "--quiet"]
+        if os.path.isdir(espeak):
+            cmd += ["--espeak_data", _rel(espeak, self.work)]
         kwargs = dict(stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                      text=True, encoding="utf-8", cwd=os.path.dirname(self.exe), bufsize=1)
+                      text=True, encoding="utf-8", errors="replace", cwd=self.work, bufsize=1,
+                      executable=self.exe)
         if WINDOWS:
             kwargs["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
         self.proc = subprocess.Popen(cmd, **kwargs)
         return self.proc
 
     def warm(self):
-        """Start Piper and load the model now, so the first real callout is not delayed."""
-        with self.lock:
-            self._start()
+        """Load the model now with a throwaway line, so the first real callout is not delayed."""
+        try:
+            self.synth("Ready.", cache=False)
+        except Exception:
+            pass
 
-    def synth(self, text, timeout=20):
+    def synth(self, text, timeout=None, cache=True):
         text = " ".join((text or "").split())
         if not text:
             return None
         cached = os.path.join(self.cache, self.key(text) + ".wav")
         if os.path.isfile(cached):
             return cached
+        if timeout is None:
+            timeout = 8 if self.warmed else 25  # the first line also loads the model
         with self.lock:
-            proc = self._start()
-            proc.stdin.write(text + "\n")
-            proc.stdin.flush()
-            result = {}
+            before = set(os.listdir(self.work))
+            try:
+                proc = self._start()
+                proc.stdin.write(text + "\n")
+                proc.stdin.flush()
+                result = {}
 
-            def read():
-                result["line"] = proc.stdout.readline()
+                def read():
+                    result["line"] = proc.stdout.readline()
 
-            reader = threading.Thread(target=read, daemon=True)
-            reader.start()
-            reader.join(timeout)
-            out = (result.get("line") or "").strip()
-            if not out or not os.path.isfile(out):
+                reader = threading.Thread(target=read, daemon=True)
+                reader.start()
+                reader.join(timeout)
+                if not result.get("line"):
+                    raise RuntimeError("studio voice timed out")
+            except Exception:
+                self.kill()
+                raise
+            # The printed path can be mangled by the console code page; find the new file instead.
+            made = [n for n in os.listdir(self.work) if n.endswith(".wav") and n not in before]
+            if not made:
                 self.kill()
                 raise RuntimeError("studio voice produced no audio")
+            out = max((os.path.join(self.work, n) for n in made), key=os.path.getmtime)
+            self.warmed = True
+        if not cache:
+            os.remove(out)
+            return None
         self._store(out, cached)
         return cached
 
@@ -317,6 +368,8 @@ class Studio:
             pass
 
     def speak(self, text):
+        if self.player._stop.is_set():
+            return
         path = self.synth(text)
         if path:
             try:
