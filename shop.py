@@ -493,7 +493,7 @@ def advise(me, enemies, gold, catalog, game_time=0, allies=None, deaths=0):
         if action:
             afford = gold >= action["cost"]
             mark = "BUY" if afford else "need %d" % int(action["cost"] - gold)
-            lines.append("%s  %dg  %s" % (action["name"], action["cost"], mark))
+            lines.append("NEXT %s  %dg  %s" % (action["name"], action["cost"], mark))
             key = action["id"]
             urgent = action["note"] in ("heal", "pen", "shield", "boots")
             if afford and game_time >= 80 and urgent:

@@ -6,31 +6,35 @@
 
 <p align="center"><strong>Tiny goblin. Big macro.</strong></p>
 
-Macro Goblin is a local, read-only League of Legends macro companion. It speaks and displays lightweight reminders for objective timers, item adaptation, CS pace, deaths, and simple pattern reads.
+Macro Goblin is a live macro coach for League of Legends. It talks in your ear and shows a small card over the game: objective timers, the dragon race, item counters, CS pace and death patterns, called at the moment they matter.
 
-It does **not** need an LLM to run. The default mode is deterministic Python logic.
+It is read-only: it uses Riot's official local game API and never touches the League client.
 
-## What it feels like
+## Download
 
-A sharp duo partner on your second monitor: quick timers, one useful focus line, clear item plan, and no fake confidence. Funny name, serious safety posture.
+**[Download for Windows](https://github.com/atxgreene/rift-coach/releases/latest/download/MacroGoblin-Setup.exe)** (Windows 10/11, 12 MB, no admin rights needed)
 
-## Safety posture
+Or install with one command in PowerShell:
 
-Macro Goblin uses Riot's local Live Client Data API and Riot Data Dragon only.
+```powershell
+irm https://atxgreene.github.io/rift-coach/install.ps1 | iex
+```
 
-It does **not**:
+Or grab the [portable zip](https://github.com/atxgreene/rift-coach/releases/latest/download/MacroGoblin-Portable.zip) and run `MacroGoblin.exe` from anywhere.
 
-- read League process memory
-- inject DLLs
-- hook DirectX
-- sniff packets
-- automate mouse/keyboard input
-- install low-level keyboard hooks
-- upload match data
+Then set League to **Borderless** (Settings > Video > Window Mode) and play. The coach connects by itself when your match loads.
 
-The overlay hotkeys use Windows `RegisterHotKey`, and the local dashboard binds to `127.0.0.1` only.
+> **"Windows protected your PC"?** The app is new and not code-signed yet, so SmartScreen asks once. Click **More info > Run anyway**. Every release lists SHA-256 checksums in `SHA256SUMS.txt`, and the one-line installer checks them for you.
 
-See [`docs/SAFETY.md`](docs/SAFETY.md) for details.
+### The app
+
+- Starts the coach automatically and waits for your match. The status card shows the clock, your champion, the next objective and the last callout.
+- Switches for voice, the overlay, match recording, the second-screen dashboard and Start with Windows. Choose a voice and speed, and use **Test** to hear it.
+- Recent matches list your last games with result, KDA and the one thing to fix. Click one to open the full note.
+- **Watch a demo** plays a real (anonymized) ranked game through the coach, so you can see and hear it without queueing.
+- Tells you when a new version is out. **Update now** downloads it, checks its checksum and installs it in place.
+
+Your settings, match notes and recordings live in `%LOCALAPPDATA%\MacroGoblin` and are kept when you update or uninstall.
 
 ## What it says in game
 
@@ -53,9 +57,15 @@ Voice is rationed: urgent lines (timers, deaths) come first, routine lines are s
 
 No required pip packages are currently needed; the runtime is stdlib-only.
 
-## Quick start
+## Running from source
 
-Before queueing, run the doctor:
+Python 3.9+, no pip packages needed.
+
+```bat
+python app.py                 :: the app window
+```
+
+Before queueing, you can run the doctor:
 
 ```bat
 python lol_coach.py --doctor
@@ -158,6 +168,14 @@ python tests\voice_check.py
 
 See [`docs/BRAND.md`](docs/BRAND.md). Generated assets live in `assets/` and are mirrored under `docs/assets/` for GitHub Pages.
 
+## Building the Windows release
+
+Every push to a `release/**` branch builds on a Windows runner: tests, PyInstaller app (`MacroGoblin.exe` + `MacroGoblinCLI.exe`), a smoke test (version, doctor, full demo game), the Inno Setup installer, a silent install/uninstall round trip, and screenshots. Pushing a `v*` tag that matches `lol_coach.__version__` also publishes the GitHub release with the installer, portable zip and checksums. See `.github/workflows/release.yml` and `packaging/`.
+
 ## Troubleshooting
 
 See [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md).
+
+## Legal
+
+Macro Goblin isn't endorsed by Riot Games and doesn't reflect the views or opinions of Riot Games or anyone officially involved in producing or managing Riot Games properties. Riot Games, and all associated properties are trademarks or registered trademarks of Riot Games, Inc.

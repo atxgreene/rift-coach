@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Macro Goblin — Tiny goblin. Big macro.</title>
+  <title>Macro Goblin — Live macro coach for League of Legends</title>
   <meta name="description" content="Macro Goblin is a local, read-only League macro companion for objective timers, item adaptation, CS pace, deaths, and simple pattern reads.">
   <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="assets/app-icon-512.png">
@@ -79,7 +79,25 @@
     .final-cta { text-align: center; background: rgba(13,24,40,.62); border: 1px solid rgba(200,170,110,.32); border-radius: 24px; padding: 34px; box-shadow: var(--shadow); }
     .final-cta p { max-width: 680px; margin: 0 auto 22px; }
     footer { border-top: 1px solid rgba(35,57,87,.75); margin-top: 48px; padding: 24px 0 38px; color: var(--muted); font-size: 14px; }
+    .dl-meta { color: var(--muted); font-size: 13px; margin-top: 12px; }
+    .shot { display: block; width: 100%; border-radius: 16px; border: 1px solid rgba(200,170,110,.35); box-shadow: var(--shadow); }
+    .install-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 22px; }
+    .install-grid .card { min-height: 0; display: flex; flex-direction: column; gap: 10px; }
+    .install-grid .card p { margin: 0; }
+    .step { color: var(--blue); font-size: 12px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
+    .cmd { display: flex; align-items: center; gap: 8px; background: #03070d; border: 1px solid #1d314c; border-radius: 12px; padding: 10px 12px; }
+    .cmd code { flex: 1; font-size: 13px; color: #d7e4f5; overflow-x: auto; white-space: nowrap; }
+    .copy { border: 1px solid var(--line); background: var(--panel-2); color: var(--gold-2); border-radius: 8px; padding: 6px 10px; font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
+    .note { margin-top: 18px; border-left: 3px solid var(--gold); background: rgba(13,24,40,.72); padding: 14px 16px; border-radius: 0 12px 12px 0; color: var(--muted); line-height: 1.6; }
+    .note b { color: var(--text); }
+    .features { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px 28px; margin-top: 22px; padding: 0; list-style: none; }
+    .features li { color: var(--muted); line-height: 1.55; padding-left: 18px; position: relative; }
+    .features li::before { content: ""; position: absolute; left: 0; top: .6em; width: 7px; height: 7px; border-radius: 2px; background: var(--gold); transform: rotate(45deg); }
+    .features li b { color: var(--text); }
+    details { margin-top: 16px; color: var(--muted); }
+    summary { cursor: pointer; color: var(--text); font-weight: 700; }
     @media (max-width: 860px) {
+      .install-grid, .features { grid-template-columns: 1fr; }
       .hero { grid-template-columns: 1fr; }
       .grid { grid-template-columns: 1fr; }
       .nav-links { display: none; }
@@ -92,8 +110,9 @@
     <nav>
       <div class="brand"><img src="assets/macro-goblin-icon.png" alt="Macro Goblin icon"> Macro Goblin</div>
       <div class="nav-links">
-        <a href="#safety">Safety</a>
+        <a href="#features">Features</a>
         <a href="#install">Install</a>
+        <a href="#safety">Safety</a>
         <a class="pill" href="https://github.com/atxgreene/rift-coach">GitHub</a>
       </div>
     </nav>
@@ -102,13 +121,14 @@
   <main>
     <section class="wrap hero">
       <div>
-        <div class="kicker">local • read-only • no hooks</div>
+        <div class="kicker">Windows app &middot; read-only &middot; free</div>
         <h1>Tiny goblin.<br><span class="gold">Big macro.</span></h1>
-        <p class="lede">A sharp little companion for timers, item plans, CS pace, death patterns, and the reminders you wish your duo would say before you flip Baron.</p>
+        <p class="lede">A live coach in your ear and on your screen: objective timers, the dragon race, item counters, CS pace and death patterns, called at the moment they matter.</p>
         <div class="actions">
-          <a class="button primary" href="https://github.com/atxgreene/rift-coach">View on GitHub</a>
-          <a class="button secondary" href="#install">Run the doctor</a>
+          <a class="button primary" href="https://github.com/atxgreene/rift-coach/releases/latest/download/MacroGoblin-Setup.exe">Download for Windows</a>
+          <a class="button secondary" href="#install">One-line install</a>
         </div>
+        <div class="dl-meta">Windows 10 and 11 &middot; 64-bit &middot; 12 MB download &middot; no admin rights needed</div>
       </div>
       <div class="hero-card" aria-label="Macro Goblin preview card">
         <img class="logo-big" src="assets/mascot-transparent.png" alt="Macro Goblin mascot">
@@ -117,7 +137,7 @@
           <div class="hud-row"><span class="hud-label">Item plan</span><span class="hud-value">Last Whisper → LDR</span></div>
           <div class="hud-row"><span class="hud-label">Lane state</span><span class="hud-value">CS 6.8 / 8</span></div>
         </div>
-        <img class="mockup-img" src="assets/overlay-mockup.png" alt="Macro Goblin overlay mockup">
+        <img class="mockup-img" src="assets/app-screenshot.png" alt="The Macro Goblin app and in-game overlay during a match">
       </div>
     </section>
 
@@ -135,9 +155,48 @@
       </div>
     </section>
 
+    <section id="features" class="wrap section">
+      <h2>What it tells you.</h2>
+      <ul class="features">
+        <li><b>Objective timers.</b> Dragon, grubs, Herald, Baron and Elder at 60 and 30 seconds, with respawns after every kill.</li>
+        <li><b>The dragon race.</b> "Dragons 2 to 1." Soul and Elder calls only when one team actually gets there.</li>
+        <li><b>Deaths that teach.</b> Who got you, your timer, and a callout when the same champion keeps winning the fight.</li>
+        <li><b>Your lane.</b> Level 6 for you and your opponent, CS pace when you fall behind, and gold burning in your pocket.</li>
+        <li><b>Their spikes.</b> Finished items from your lane opponent and their fed carry.</li>
+        <li><b>Item counters.</b> Anti-heal, armor and magic pen, and the right boots for their comp.</li>
+        <li><b>Match notes.</b> After every game: deaths, CS at 10/15/20, objectives, and one thing to fix next time.</li>
+        <li><b>Quiet by design.</b> Urgent calls first. Routine updates stay on the overlay, and late lines are dropped instead of spoken.</li>
+      </ul>
+    </section>
+
     <section id="install" class="wrap section">
-      <h2>Install / test</h2>
-      <div class="code"><code>git clone https://github.com/atxgreene/rift-coach.git<br>cd rift-coach<br>python lol_coach.py --doctor<br>python lol_coach.py --demo --speed 20 --no-voice<br>run_coach.bat</code></div>
+      <h2>Install in a minute.</h2>
+      <div class="install-grid">
+        <div class="card">
+          <span class="step">Recommended</span>
+          <b>Windows installer</b>
+          <p>Download, run, done. Adds a Start menu shortcut and an uninstaller.</p>
+          <a class="button primary" href="https://github.com/atxgreene/rift-coach/releases/latest/download/MacroGoblin-Setup.exe">Download Setup</a>
+        </div>
+        <div class="card">
+          <span class="step">One command</span>
+          <b>PowerShell</b>
+          <p>Downloads the latest release, checks its SHA-256, installs it for you.</p>
+          <div class="cmd"><code id="cmd">irm https://atxgreene.github.io/rift-coach/install.ps1 | iex</code><button class="copy" data-copy="cmd">Copy</button></div>
+        </div>
+        <div class="card">
+          <span class="step">No install</span>
+          <b>Portable zip</b>
+          <p>Unzip anywhere and run <code>MacroGoblin.exe</code>. Handy for a USB stick.</p>
+          <a class="button secondary" href="https://github.com/atxgreene/rift-coach/releases/latest/download/MacroGoblin-Portable.zip">Download zip</a>
+        </div>
+      </div>
+      <div class="note"><b>Then:</b> set League to <b>Borderless</b> (Settings &gt; Video &gt; Window Mode) so the overlay can show, and just play. The coach connects when your match loads.<br>
+      <b>"Windows protected your PC"?</b> Macro Goblin is new and not code-signed yet, so SmartScreen asks once. Click <b>More info &gt; Run anyway</b>. Every download has a SHA-256 checksum on the <a href="https://github.com/atxgreene/rift-coach/releases/latest">release page</a>.</div>
+      <details>
+        <summary>Run from source instead (Python 3.9+)</summary>
+        <div class="code" style="margin-top:12px"><code>git clone https://github.com/atxgreene/rift-coach.git<br>cd rift-coach<br>python app.py            # the app window<br>python lol_coach.py --demo --speed 20   # command line demo</code></div>
+      </details>
     </section>
 
     <section id="safety" class="wrap section">
@@ -148,15 +207,26 @@
     <section class="wrap section">
       <div class="final-cta">
         <h2>Queue with the goblin.</h2>
-        <p>Run the doctor, start the overlay before queue, and keep the card where it helps without covering the fight.</p>
+        <p>Install it once, leave it open, and queue. It speaks up when it matters and stays out of the way when it doesn't.</p>
         <div class="actions" style="justify-content:center">
-          <a class="button primary" href="https://github.com/atxgreene/rift-coach">Get Macro Goblin</a>
-          <a class="button secondary" href="#install">See install commands</a>
+          <a class="button primary" href="https://github.com/atxgreene/rift-coach/releases/latest/download/MacroGoblin-Setup.exe">Download for Windows</a>
+          <a class="button secondary" href="https://github.com/atxgreene/rift-coach">View source on GitHub</a>
         </div>
       </div>
     </section>
   </main>
 
-  <footer class="wrap">Macro Goblin is an independent local companion project. Not affiliated with Riot Games.</footer>
+  <footer class="wrap">Macro Goblin isn't endorsed by Riot Games and doesn't reflect the views or opinions of Riot Games or anyone officially involved in producing or managing Riot Games properties. Riot Games, and all associated properties are trademarks or registered trademarks of Riot Games, Inc.</footer>
+  <script>
+    document.querySelectorAll(".copy").forEach(function (button) {
+      button.addEventListener("click", function () {
+        var text = document.getElementById(button.dataset.copy).textContent;
+        (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject()).then(function () {
+          button.textContent = "Copied";
+          setTimeout(function () { button.textContent = "Copy"; }, 1600);
+        }).catch(function () { window.prompt("Copy this command:", text); });
+      });
+    });
+  </script>
 </body>
 </html>

@@ -25,6 +25,15 @@ def single_instance():
     return kernel32.GetLastError() != 183  # ERROR_ALREADY_EXISTS
 
 
+def release_single_instance():
+    """Let go of the lock early (before starting the updater, which waits for it to be free)."""
+    global _mutex
+    if IS_WIN and _mutex:
+        import ctypes
+        ctypes.windll.kernel32.CloseHandle(ctypes.c_void_p(_mutex))
+        _mutex = None
+
+
 def focus_existing(title):
     """Bring the already-running window forward (used when a second copy is launched)."""
     if not IS_WIN:

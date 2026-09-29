@@ -261,10 +261,14 @@ def split_shop(lines):
             reason = line[len("BUILD"):].strip()
             if reason and reason != "adapting":
                 alert = "Build " + reason
-        elif line.startswith(("BUY", "THEN")):
-            buy.append(line)
-        elif line.startswith(("HAVE", "LATER")):
-            later.append(line)
+        elif line.startswith("NEXT "):
+            buy.append(line[5:].replace("  BUY", "  \u00b7  buy now").replace("  need ", "  \u00b7  need "))
+        elif line.startswith("THEN "):
+            buy.append("then " + line[5:])
+        elif line.startswith("LATER "):
+            later.append("later: " + line[6:])
+        elif line.startswith("HAVE "):
+            later.append("have: " + line[5:])
         else:
             # Pattern guidance / warning lines from the coach.
             if not alert:
@@ -310,7 +314,7 @@ def run(bus, stop, edit=False, master=None):
     fade = CONFIG["overlay"].get("callout_fade_seconds", 12)
 
     root = tk.Toplevel(master) if master is not None else tk.Tk()
-    root.title("Macro Goblin")
+    root.title("Macro Goblin Overlay")
     root.overrideredirect(True)
     root.attributes("-topmost", True)
     pos_x, pos_y = place(layout, width, height, screen_bounds(root))

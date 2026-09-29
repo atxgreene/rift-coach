@@ -1,5 +1,41 @@
 # Changelog
 
+## 1.1.0 - 2026-09-29
+
+Macro Goblin is now a Windows app with an installer.
+
+### New
+- **The app window.** It starts the coach automatically and shows live status: clock, champion, next objective, dragon race, gold, and the last callout. It also has:
+  - Pause/start and **Watch a demo** buttons
+  - Switches for voice, overlay, recording, the dashboard and Start with Windows
+  - Voice and speed pickers with a **Test** button
+  - A list of recent matches that opens each note
+  - A welcome card on first run
+- **Windows installer.** `MacroGoblin-Setup.exe` installs per user with no admin prompt. It adds Start menu and desktop shortcuts and an optional start with Windows, and it comes with an uninstaller. Your data is kept.
+- **One-line install:** `irm https://atxgreene.github.io/rift-coach/install.ps1 | iex`. It downloads the latest release, checks its SHA-256 and installs it silently.
+- **Portable zip** for running without installing.
+- **Update check.** A banner appears when a new version is out. **Update now** downloads the installer, verifies its checksum against the release's `SHA256SUMS.txt`, and upgrades in place.
+- **Settings are saved** in `%LOCALAPPDATA%\MacroGoblin\settings.json`, including voice, speed, volume and CS target. The installed app keeps all its data there.
+- **Command line:** `MacroGoblinCLI.exe` ships alongside the app, with every `lol_coach.py` flag.
+
+### Improved
+- **Overlay item plan** reads "Yun Tal Wildarrows · 3000g · need 1775" / "later: Infinity Edge", and no longer shows filler like "PLAN adapting". Roles show as Top/Jungle/Mid/Bot/Support.
+- **Overlay logo** no longer disappears when the overlay runs inside the app.
+- **Launcher window** always fits its content and stays on screen, whatever the fonts or DPI.
+- **Offline first run:** a Data Dragon snapshot is bundled, so item data works even before the first download.
+- **Windows polish:** only one copy runs at a time (opening it again brings the window forward), crisp text on high-DPI screens, a dark title bar and its own taskbar icon.
+- **Crash reports:** crashes are written to `logs\crash-*.txt` instead of vanishing silently.
+
+### Release engineering
+- Every build runs on a real Windows runner:
+  - tests
+  - PyInstaller build
+  - smoke test: version, doctor, and a full demo game
+  - installer build
+  - silent install/uninstall round trip
+  - screenshots of the app, overlay and installer
+- Tagged builds publish the release with checksums.
+
 ## 1.0.0 - 2026-09-28
 
 First ship build, tuned on 18 real matches.

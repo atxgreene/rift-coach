@@ -209,6 +209,7 @@ class LauncherApp:
         self.last_reports_scan = 0
         self.report_rows = None
         self.closing = False
+        self.pending_installer = None
 
         winplat.enable_dpi_awareness()
         winplat.set_app_user_model_id()
@@ -567,10 +568,15 @@ class LauncherApp:
             self.fit_height()
 
     def fit_height(self):
-        self.root.update_idletasks()
-        height = min(self.content.winfo_reqheight(), self.root.winfo_screenheight() - self.px(80))
-        width = max(self.root.winfo_width(), self.content.winfo_reqwidth())
-        self.root.geometry("%dx%d" % (width, height))
+        """Resize to the content (fonts differ per PC) and keep the whole window on screen."""
+        root = self.root
+        root.update_idletasks()
+        screen_w, screen_h = root.winfo_screenwidth(), root.winfo_screenheight()
+        height = min(self.content.winfo_reqheight(), screen_h - self.px(80))
+        width = min(max(root.winfo_width(), self.content.winfo_reqwidth()), screen_w)
+        x = min(max(0, root.winfo_x()), max(0, screen_w - width))
+        y = min(max(0, root.winfo_y()), max(0, screen_h - height - self.px(48)))
+        root.geometry("%dx%d+%d+%d" % (width, height, x, y))
 
     # ----- overlay
     def show_overlay(self, on):
@@ -605,8 +611,10 @@ class LauncherApp:
             if time.time() - self.last_reports_scan > 4:
                 self.last_reports_scan = time.time()
                 self.refresh_reports()
-            want = min(self.content.winfo_reqheight(), self.root.winfo_screenheight() - self.px(80))
-            if abs(self.root.winfo_height() - want) > 2 and self.root.state() == "normal":
+            want_h = min(self.content.winfo_reqheight(), self.root.winfo_screenheight() - self.px(80))
+            want_w = self.content.winfo_reqwidth()
+            if self.root.state() == "normal" and (abs(self.root.winfo_height() - want_h) > 2
+                                                  or self.root.winfo_width() < want_w):
                 self.fit_height()
         finally:
             self.root.after(250, self.tick)
@@ -761,10 +769,11 @@ class LauncherApp:
         threading.Thread(target=work, daemon=True).start()
 
     def install_and_quit(self, path):
+        # The installer refuses to run while this app holds its single-instance lock, so it is
+        # started from main() after the window has closed and the lock is released.
         self.banner_text.configure(text="Installing. Macro Goblin will reopen.")
         self.root.update_idletasks()
-        subprocess.Popen([path, "/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS"],
-                         close_fds=True)
+        self.pending_installer = path
         self.quit()
 
     # ----- errors / exit
@@ -829,6 +838,9 @@ def main(argv=None):
             pass
         return 1
     app.run()
+    if app.pending_installer:
+        winplat.release_single_instance()
+        subprocess.Popen([app.pending_installer, "/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART"], close_fds=True)
     return 0
 
 
