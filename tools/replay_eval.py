@@ -38,9 +38,9 @@ def data_dragon():
     return lol_coach.DataDragon(offline_file=source, quiet=True)
 
 
-def replay(source, dd):
+def replay(source, dd, style="standard"):
     rec = Recorder()
-    coach = lol_coach.Coach(rec, dd)
+    coach = lol_coach.Coach(rec, dd, style=style)
     rec.clock = lambda: coach.t
     frames = lol_coach.load_frames(source)
     with contextlib.redirect_stdout(io.StringIO()):
@@ -55,12 +55,13 @@ def main():
     parser.add_argument("sources", nargs="+")
     parser.add_argument("--summary", action="store_true", help="counts only")
     parser.add_argument("--quiet-lines", action="store_true", help="also show overlay-only lines")
+    parser.add_argument("--style", choices=lol_coach.STYLES, default="standard")
     args = parser.parse_args()
     dd = data_dragon()
     total_voiced = total_minutes = 0
     top = collections.Counter()
     for source in args.sources:
-        coach, rec, minutes = replay(source, dd)
+        coach, rec, minutes = replay(source, dd, args.style)
         voiced = [row for row in rec.lines if row[1] > lol_coach.P_QUIET]
         total_voiced += len(voiced)
         total_minutes += minutes

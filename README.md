@@ -33,8 +33,13 @@ Then set League to **Borderless** (Settings > Video > Window Mode) and play. The
 ### The app
 
 - Starts the coach automatically and waits for your match. The status card shows the clock, your champion, the next objective and the last callout.
-- Switches for voice, the overlay, match recording, the second-screen dashboard and Start with Windows. Choose a voice and speed, and use **Test** to hear it.
-- Recent matches list your last games with result, KDA and the one thing to fix. Click one to open the full note.
+- **Studio voice:** a natural neural voice that runs offline on your PC (no account, no internet). Pick Kristin, download Norman in one click, or use any Windows voice. Choose a speed and use **Test** to hear it.
+- **Coach style:** Beginner explains the why behind new calls, Standard is the default, and Pro speaks only calls that change a decision now.
+- **Spoken callouts:** mute any kind of call (objectives, deaths, items, CS, enemy spikes, vision, macro). Muted calls still show on the overlay.
+- **Quick keys:** `Ctrl+Shift+R` repeats the last call, `Ctrl+Shift+N` says what's next.
+- Switches for the overlay, match recording, the second-screen dashboard and Start with Windows.
+- Recent matches list your last games with result, KDA, overall grade and the one thing to fix. Click one to open the full note.
+- **Your trends:** record, streak, best champions and your average grade in each area, with a tip for the weakest.
 - **Watch a demo** plays a real (anonymized) ranked game through the coach, so you can see and hear it without queueing.
 - Tells you when a new version is out. **Update now** downloads it, checks its checksum and installs it in place.
 
@@ -48,7 +53,10 @@ Your settings, match notes and recordings live in `%LOCALAPPDATA%\MacroGoblin` a
 - **Your lane:** level 6 for you and your lane opponent, CS pace when you are behind, gold banked.
 - **Their spikes:** finished items from your lane opponent and their fed carry (the rest go on the overlay only).
 - **Item plan:** counters for healing, armor, MR and shields, with class-aware cores for ADCs and mages.
-- **After the game:** a match note in `reports\` with deaths, CS at 10/15/20, objectives, gold curve and one focus for next game.
+- **Back timing:** "Dragon in 90. You have 1400 gold. Good time to back and shop."
+- **Vision:** control ward and vision score reminders, a few times a game at most.
+- **Threat read:** damage mix and assassin-heavy comps at the start of the game.
+- **After the game:** a report card (farming, fighting, survival, vision, objectives, A to D) and a match note in `reports\` with deaths, CS at 10/15/20, objectives, gold curve and one focus for next game.
 
 Voice is rationed: urgent lines (timers, deaths) come first, routine lines are spoken at most every 20 seconds, and any line that is more than a few seconds late is dropped instead of spoken. Everything still shows on the overlay.
 
@@ -108,6 +116,10 @@ python lol_coach.py --replay captures\<timestamp> --speed 20 --no-voice
 python lol_coach.py --web
 python lol_coach.py --log
 python lol_coach.py --me YourSummonerName
+python lol_coach.py --style beginner          # or pro
+python lol_coach.py --mute farm --mute vision
+python lol_coach.py --voice-name "studio:en_US-norman-medium"
+python tools/fetch_voice.py                   # studio voice for source runs (the installer already has it)
 ```
 
 `--web` binds to `127.0.0.1:8765` only. It does not listen on the LAN.
@@ -179,6 +191,10 @@ Every push to a `release/**` branch builds on a Windows runner: tests, PyInstall
 ## Troubleshooting
 
 See [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md).
+
+## Third-party
+
+The studio voice uses [Piper](https://github.com/rhasspy/piper) (MIT), which includes [espeak-ng](https://github.com/espeak-ng/espeak-ng) (GPL-3.0) and ONNX Runtime (MIT). It runs as a separate program. The voices (Kristin, Norman) are from [piper-voices](https://huggingface.co/rhasspy/piper-voices) and were trained on public-domain LibriVox recordings. Details: `voice\NOTICE.txt` in the install folder.
 
 ## Legal
 

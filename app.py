@@ -19,6 +19,7 @@ import traceback
 
 import lol_coach
 import settings as settings_store
+import review
 import updates
 import voice as studio_voice
 import winplat
@@ -42,6 +43,11 @@ DOWN = "#e07a7a"
 TRACK_OFF = "#263245"
 
 SPEEDS = [("Calm", 0), ("Normal", 1), ("Quick", 3)]
+STYLE_CHOICES = [("Beginner", "beginner"), ("Standard", "standard"), ("Pro", "pro")]
+STYLE_HELP = {"beginner": "Explains the why behind new calls.",
+              "standard": "Timers, deaths, items and macro reads.",
+              "pro": "Only calls that change a decision now."}
+GRADE_COLORS = {"A": "#5fd38d", "B": "#c8aa6e", "C": "#e0a05a", "D": "#e06a6a"}
 OBJ_NAMES = {"dragon": "Dragon", "grubs": "Void grubs", "herald": "Herald", "baron": "Baron"}
 ROLE_NAMES = {"TOP": "Top", "JUNGLE": "Jungle", "MIDDLE": "Mid", "BOTTOM": "Bot", "UTILITY": "Support"}
 
@@ -63,7 +69,7 @@ def round_rect(canvas, x1, y1, x2, y2, r, **kw):
 
 
 def read_reports(folder, limit=4):
-    """Newest match notes: [{'champion','role','result','kda','when','focus','path'}]."""
+    """Newest match notes: [{'champion','role','result','kda','when','focus','path','grades'}]."""
     rows = []
     for path in sorted(glob.glob(os.path.join(folder, "*.md")), key=os.path.getmtime, reverse=True)[:limit]:
         try:
@@ -84,8 +90,15 @@ def read_reports(folder, limit=4):
             "when": friendly_time(os.path.getmtime(path)),
             "focus": focus.replace("Next game: ", ""),
             "path": path,
+            "grades": review.decode(meta.get("grades", "")),
         })
     return rows
+
+
+def overall_grade(grades):
+    if not grades:
+        return ""
+    return review.letter(sum(review.GRADE_POINTS[g] for g in grades.values()) / float(len(grades)))
 
 
 def friendly_time(stamp):
@@ -388,6 +401,9 @@ class LauncherApp:
         _outer, self.matches = self.card(left, "RECENT MATCHES",
                                          action=("Open folder", lambda: winplat.open_path(lol_coach.data_path("reports"))))
 
+        # Trends across saved match notes
+        _outer, self.trends = self.card(left, "YOUR TRENDS")
+
         # Welcome (first run) sits above status
         self.welcome = None
         if not self.settings.get("first_run_done"):
@@ -414,6 +430,41 @@ class LauncherApp:
             self.speed_labels.append((lbl, rate))
         self.paint_speeds()
         Button(self.voice_row, "Test", self.test_voice, px, self.f_small, kind="ghost").canvas.pack(side="right")
+
+        # Coach style: segmented Beginner / Standard / Pro
+        style_row = tk.Frame(box, bg=CARD)
+        style_row.pack(fill="x", pady=(0, px(12)))
+        text = tk.Frame(style_row, bg=CARD)
+        text.pack(side="left", fill="x", expand=True)
+        tk.Label(text, text="Coach style", bg=CARD, fg=TEXT, font=self.f_bold, anchor="w").pack(fill="x")
+        self.style_help = tk.Label(text, text="", bg=CARD, fg=MUTED, font=self.f_small, anchor="w",
+                                   justify="left", wraplength=px(190))
+        self.style_help.pack(fill="x")
+        seg = tk.Frame(style_row, bg=RAISED)
+        seg.pack(side="right", anchor="n")
+        self.style_labels = []
+        for name, key in STYLE_CHOICES:
+            lbl = tk.Label(seg, text=name, bg=RAISED, fg=MUTED, font=self.f_small, padx=px(8), pady=px(5),
+                           cursor="hand2")
+            lbl.pack(side="left")
+            lbl.bind("<Button-1>", lambda _e, k=key: self.set_style(k))
+            self.style_labels.append((lbl, key))
+        self.paint_style()
+
+        # Which kinds of callouts are spoken
+        mute_row = tk.Frame(box, bg=CARD)
+        mute_row.pack(fill="x", pady=(0, px(12)))
+        text = tk.Frame(mute_row, bg=CARD)
+        text.pack(side="left", fill="x", expand=True)
+        tk.Label(text, text="Spoken callouts", bg=CARD, fg=TEXT, font=self.f_bold, anchor="w").pack(fill="x")
+        self.mute_help = tk.Label(text, text="", bg=CARD, fg=MUTED, font=self.f_small, anchor="w")
+        self.mute_help.pack(fill="x")
+        self.mute_button = tk.Label(mute_row, text="Choose  \u25be", bg=RAISED, fg=TEXT, font=self.f_small,
+                                    padx=px(10), pady=px(5), cursor="hand2")
+        self.mute_button.pack(side="right", anchor="n")
+        self.mute_button.bind("<Button-1>", self.pick_mutes)
+        self.paint_mutes()
+        self.setting_row(box, "hotkeys", "Quick keys", "Ctrl+Shift+R repeats the last call. Ctrl+Shift+N says what's next.")
         self.setting_row(box, "overlay", "On-screen overlay", "Ctrl+Shift+O hides it.  Ctrl+Shift+M moves it.")
         self.setting_row(box, "capture", "Record my matches", "Stays on this PC. Powers your match notes.")
         self.setting_row(box, "web", "Second-screen dashboard", "Live timers in your browser.",
@@ -422,6 +473,7 @@ class LauncherApp:
         self.setting_row(box, "start_with_windows", "Start with Windows", "Opens minimized, ready before you queue.",
                          value=start_value, last=True)
         tk.Frame(box, bg=CARD, width=px(330), height=1).pack()
+
 
     def build_welcome(self, parent):
         tk, px = self.tk, self.px
@@ -465,6 +517,50 @@ class LauncherApp:
             name = ""
         name = (name or "Default voice").replace("Microsoft ", "").replace(" Desktop", "")
         return "%s  \u25be" % name
+
+    def paint_style(self):
+        current = self.settings.get("coach_style", "standard")
+        for lbl, key in self.style_labels:
+            active = key == current
+            lbl.configure(bg=GOLD if active else RAISED, fg=BG if active else MUTED)
+        self.style_help.configure(text=STYLE_HELP.get(current, ""))
+
+    def set_style(self, key):
+        if key == self.settings.get("coach_style"):
+            return
+        self.settings["coach_style"] = key
+        self.paint_style()
+        self.save_and_restart()
+
+    def paint_mutes(self):
+        muted = [k for k in self.settings.get("muted", []) if k in lol_coach.CATEGORIES]
+        if not muted:
+            text = "All kinds on. Muted ones still show on the overlay."
+        elif len(muted) == 1:
+            text = "%s muted." % lol_coach.CATEGORIES[muted[0]]
+        else:
+            text = "%d kinds muted." % len(muted)
+        self.mute_help.configure(text=text)
+
+    def pick_mutes(self, event):
+        tk = self.tk
+        menu = tk.Menu(self.root, tearoff=0, bg=RAISED, fg=TEXT, activebackground=GOLD, activeforeground=BG,
+                       selectcolor=GOLD_HI, font=self.f_small, bd=0)
+        muted = set(self.settings.get("muted", []))
+        self._mute_vars = {}
+        for key, label in lol_coach.CATEGORIES.items():
+            var = tk.BooleanVar(value=key not in muted)
+            self._mute_vars[key] = var
+            menu.add_checkbutton(label=label, variable=var, command=lambda k=key: self.toggle_mute(k))
+        menu.tk_popup(event.x_root, event.y_root)
+
+    def toggle_mute(self, key):
+        muted = [k for k in self.settings.get("muted", []) if k != key]
+        if not self._mute_vars[key].get():
+            muted.append(key)
+        self.settings["muted"] = muted
+        self.paint_mutes()
+        self.save_and_restart()
 
     def paint_speeds(self):
         current = int(self.settings.get("voice_rate", 1))
@@ -577,7 +673,8 @@ class LauncherApp:
             demo=demo, speed=12 if demo else 10, voice=s["voice"], voice_name=s["voice_name"],
             voice_rate=s["voice_rate"], voice_volume=s["voice_volume"], capture=s["capture"] and not demo,
             log=not demo, log_path=self.log_path, web=s["web"], me=s["summoner"] or None,
-            cs_target=s["cs_target"],
+            cs_target=s["cs_target"], coach_style=s["coach_style"], muted=s["muted"],
+            hotkeys=s["hotkeys"] and not demo,
         )
 
     def start_session(self, demo=False):
@@ -756,11 +853,13 @@ class LauncherApp:
 
     def refresh_reports(self):
         tk, px = self.tk, self.px
-        rows = read_reports(lol_coach.data_path("reports"))
-        signature = [(row["path"], row["result"]) for row in rows]
+        history = read_reports(lol_coach.data_path("reports"), limit=20)
+        rows = history[:4]
+        signature = [(row["path"], row["result"], len(history)) for row in rows]
         if signature == self.report_rows:
             return
         self.report_rows = signature
+        self.render_trends(history)
         for child in self.matches.winfo_children()[1:]:
             child.destroy()
         if not rows:
@@ -784,11 +883,55 @@ class LauncherApp:
                 tk.Label(head, text=row["kda"], bg=CARD, fg=TEXT, font=self.f_small).pack(side="left",
                                                                                        padx=(px(8), 0))
             tk.Label(head, text=row["when"], bg=CARD, fg=DIM, font=self.f_small).pack(side="right")
+            grade = overall_grade(row.get("grades"))
+            if grade:
+                tk.Label(head, text=grade, bg=RAISED, fg=GRADE_COLORS[grade], font=self.f_tiny,
+                         padx=px(5)).pack(side="right", padx=(0, px(8)))
             if row["focus"]:
                 tk.Label(line, text=row["focus"], bg=CARD, fg=MUTED, font=self.f_small, anchor="w").pack(fill="x")
             for widget in [line, head] + list(line.winfo_children()) + list(head.winfo_children()):
                 widget.bind("<Button-1>", lambda _e, p=row["path"]: winplat.open_path(p))
         self.fit_height()
+
+    def render_trends(self, history):
+        tk, px = self.tk, self.px
+        box = self.trends
+        for child in box.winfo_children()[1:]:
+            child.destroy()
+        games = [{"champion": r["champion"], "result": r["result"], "grades": r.get("grades") or {}} for r in history]
+        info = review.trends(games)
+        if info["wins"] + info["losses"] < 2:
+            tk.Label(box, text="Play a couple of games and your record, best champions and the one thing to "
+                               "work on show up here.", bg=CARD, fg=MUTED, font=self.f_small, anchor="w",
+                     justify="left", wraplength=px(360)).pack(fill="x")
+            return
+        top = tk.Frame(box, bg=CARD)
+        top.pack(fill="x")
+        tk.Label(top, text="%dW  %dL" % (info["wins"], info["losses"]), bg=CARD, fg=TEXT,
+                 font=self.f_head).pack(side="left")
+        tk.Label(top, text="last %d games" % (info["wins"] + info["losses"]), bg=CARD, fg=MUTED,
+                 font=self.f_small).pack(side="left", padx=(px(8), 0), pady=(px(4), 0))
+        if info["streak"]:
+            tk.Label(top, text=info["streak"], bg=CARD, fg=UP if "win" in info["streak"] else DOWN,
+                     font=self.f_small).pack(side="right", pady=(px(4), 0))
+        champs = "   ".join("%s %d-%d" % row for row in info["champions"][:3])
+        if champs:
+            tk.Label(box, text=champs, bg=CARD, fg=MUTED, font=self.f_small, anchor="w").pack(fill="x",
+                                                                                         pady=(px(2), px(8)))
+        if info["averages"]:
+            grid = tk.Frame(box, bg=CARD)
+            grid.pack(fill="x")
+            for col, area in enumerate(a for a in review.AREAS if a in info["averages"]):
+                grade = review.letter(info["averages"][area])
+                cell = tk.Frame(grid, bg=RAISED, padx=px(6), pady=px(4))
+                cell.grid(row=0, column=col, padx=(0, px(6)), sticky="w")
+                tk.Label(cell, text=grade, bg=RAISED, fg=GRADE_COLORS[grade], font=self.f_bold).pack()
+                tk.Label(cell, text=review.AREA_NAMES[area], bg=RAISED, fg=MUTED, font=self.f_tiny).pack()
+        if info["weakest"]:
+            tk.Label(box, text="Work on %s. %s" % (review.AREA_NAMES[info["weakest"]].lower(),
+                                                   review.TIPS[info["weakest"]]),
+                     bg=CARD, fg=TEXT, font=self.f_small, anchor="w", justify="left",
+                     wraplength=px(360)).pack(fill="x", pady=(px(8), 0))
 
     # ----- updates
     def check_updates(self, manual=False):

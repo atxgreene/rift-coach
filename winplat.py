@@ -140,3 +140,53 @@ def open_path(path):
 
 def open_url(url):
     webbrowser.open(url)
+
+
+# Coach hotkeys: Ctrl+Shift+R repeats the last callout, Ctrl+Shift+N says what's next.
+# RegisterHotKey only (the same OS call the overlay uses); no keyboard hook, no game input.
+HOTKEYS = {"repeat": (0x5210, 0x52, "Ctrl+Shift+R"), "next": (0x4E10, 0x4E, "Ctrl+Shift+N")}
+
+
+def global_hotkeys(on_press, stop, names=("repeat", "next")):
+    """Register the named hotkeys on a dedicated thread; call on_press(name) for each press.
+
+    Returns the thread, or None off Windows. Keys that another app already owns are skipped.
+    """
+    if not IS_WIN:
+        return None
+    import ctypes
+    import threading
+    import time
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    mods = 0x0002 | 0x0004 | 0x4000  # Ctrl + Shift, no auto-repeat
+    by_id = {HOTKEYS[n][0]: n for n in names if n in HOTKEYS}
+
+    def run():
+        msg = wintypes.MSG()
+        user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, 0)  # create this thread's queue
+        ids = []
+        for hid, name in by_id.items():
+            if user32.RegisterHotKey(None, hid, mods, HOTKEYS[name][1]):
+                ids.append(hid)
+            else:
+                print("Hotkey %s is already taken by another app." % HOTKEYS[name][2], flush=True)
+        try:
+            while not stop.is_set():
+                if user32.PeekMessageW(ctypes.byref(msg), None, 0x0312, 0x0312, 1):
+                    name = by_id.get(int(msg.wParam))
+                    if name:
+                        try:
+                            on_press(name)
+                        except Exception as exc:
+                            print("Hotkey failed: %s" % exc, flush=True)
+                else:
+                    time.sleep(0.03)
+        finally:
+            for hid in ids:
+                user32.UnregisterHotKey(None, hid)
+
+    thread = threading.Thread(target=run, name="coach-hotkeys", daemon=True)
+    thread.start()
+    return thread

@@ -11,7 +11,7 @@ import lol_coach
 
 DEFAULTS = {
     "voice": True,
-    "voice_name": "",          # "" = Windows default (Zira if installed)
+    "voice_name": "",          # "" = best available (studio voice), "studio:<id>", or a Windows voice name
     "voice_rate": 1,           # -10..10, System.Speech scale
     "voice_volume": 100,       # 0..100
     "overlay": True,
@@ -22,6 +22,9 @@ DEFAULTS = {
     "start_with_windows": False,
     "check_updates": True,
     "first_run_done": False,
+    "coach_style": "standard", # beginner | standard | pro
+    "muted": [],               # callout kinds with voice off (lol_coach.CATEGORIES)
+    "hotkeys": True,           # Ctrl+Shift+R repeat, Ctrl+Shift+N what's next
 }
 
 
@@ -52,6 +55,9 @@ def load():
     data["voice_rate"] = max(-10, min(10, int(data["voice_rate"])))
     data["voice_volume"] = max(0, min(100, int(data["voice_volume"])))
     data["cs_target"] = max(3.0, min(12.0, float(data["cs_target"])))
+    if data["coach_style"] not in lol_coach.STYLES:
+        data["coach_style"] = "standard"
+    data["muted"] = [k for k in data["muted"] if isinstance(k, str) and k in lol_coach.CATEGORIES]
     return data
 
 

@@ -36,8 +36,9 @@ import urllib.request
 
 import shop
 import patterns
+import review
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 LIVE_URL = "https://127.0.0.1:2999/liveclientdata/allgamedata"
 DDRAGON = "https://ddragon.leagueoflegends.com"
@@ -95,6 +96,10 @@ CONFIG = {
     "cs_target_per_min": 8.0,
     "cs_check_every": 180,
     "gold_bank_threshold": 1300,
+    "back_timing_seconds": 90,     # "Dragon in 90, good time to back" when you are holding gold
+    "back_timing_gold": 1100,
+    "vision_check_every": 300,
+    "vision_reminders": 3,
     "gold_bank_cooldown": 180,
     "gold_diff_every": 300,
     "legendary_min_gold": 2500,
@@ -191,6 +196,22 @@ class UiBus:
 P_QUIET, P_LOW, P_NORMAL, P_URGENT = 0, 1, 2, 3
 # Seconds a queued line stays worth saying. A late "Dragon in 30 seconds" is worse than silence.
 VOICE_TTL = {P_LOW: 20, P_NORMAL: 15, P_URGENT: 10}
+
+# Coach style: Beginner adds a short "why" to new kinds of callouts; Pro keeps voice to what
+# changes a decision right now (low-priority lines and death reflections go to the overlay only).
+STYLES = ("beginner", "standard", "pro")
+# Callout families a player can mute. Muted lines still show on the overlay and in the notes.
+CATEGORIES = {
+    "objective": "Objectives and timers",
+    "death": "Deaths",
+    "reflect": "Death reflection questions",
+    "shop": "Items and gold",
+    "farm": "CS checks",
+    "enemy": "Enemy power spikes",
+    "vision": "Vision and wards",
+    "macro": "Gold lead and patterns",
+}
+CONTROL_WARD = 2055
 
 
 class Speaker:
@@ -659,6 +680,13 @@ def scores_of(player):
     return scores if isinstance(scores, dict) else {}
 
 
+def _num(value):
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def killer_label(name, player=None):
     """Readable name for whatever got the kill. Riot sends raw IDs for towers and monsters."""
     if player:
@@ -708,8 +736,10 @@ def result_of(raw):
 
 
 class Coach:
-    def __init__(self, speaker, dd, claude=None, bus=None, me_name=None):
+    def __init__(self, speaker, dd, claude=None, bus=None, me_name=None, style="standard", muted=()):
         self.say = speaker.say
+        self.style = style if style in STYLES else "standard"
+        self.muted = set(muted or ())
         self.dd = dd
         self.claude = claude
         self.bus = bus
@@ -778,17 +808,37 @@ class Coach:
         self.enemies = []
         self.my_names = set()
         self.last_ui_diff = 0
+        self.last_voiced = ""
+        self.why_said = {}
+        self.last_vision = 0
+        self.vision_said = 0
+        self.back_said = set()
+        self.card = {}
+        self.gold = 0
 
     # ----- output -------------------------------------------------------
     def note(self, text):
         self.recent.append((self.t, text, time.time()))
         self.recent = [row for row in self.recent if self.t - row[0] < 180]
 
-    def speak(self, text, priority=P_NORMAL, ttl=None):
-        """Everything goes to the overlay feed. Voice is rationed by priority."""
+    def speak(self, text, priority=P_NORMAL, ttl=None, cat=None, why=None):
+        """Everything goes to the overlay feed. Voice is rationed by priority, category and style.
+
+        cat: callout family the player can mute (CATEGORIES). why: a one-sentence reason that
+        Beginner style adds the first two times a kind of callout comes up.
+        """
+        if why and self.style == "beginner":
+            key = why
+            if self.why_said.get(key, 0) < 2:
+                self.why_said[key] = self.why_said.get(key, 0) + 1
+                text = "%s %s" % (text, why)
         self.note(text)
         if self.quiet:
             return
+        if cat in self.muted:
+            priority = P_QUIET
+        elif self.style == "pro" and (priority == P_LOW or cat == "reflect"):
+            priority = P_QUIET
         if priority == P_LOW:
             if self.t - self.last_low_voice < CONFIG["low_voice_gap"]:
                 priority = P_QUIET
@@ -796,6 +846,7 @@ class Coach:
                 self.last_low_voice = self.t
         if priority > P_QUIET:
             self.voiced += 1
+            self.last_voiced = text
         try:
             self.say(text, priority=priority, ttl=ttl)
         except TypeError:
@@ -916,10 +967,15 @@ class Coach:
         self.enemy_items()
         self.levels()
         self.cs_check()
+        try:
+            self.gold = float(active.get("currentGold", 0) or 0)
+        except (TypeError, ValueError):
+            self.gold = 0
         self.gold_bank(active)
         self.sample()
         self.gold_diff()
         self.shop_check(active)
+        self.vision_check()
         self.pattern_check()
         self.claude_checkin(periodic=True)
         if late:
@@ -1002,11 +1058,12 @@ class Coach:
                 self.spawns["baron"] = nxt
                 self.objectives.append({"t": et, "name": "baron", "who": who, "detail": ""})
                 stolen = " Stolen!" if is_stolen(ev) else ""
-                self.speak("%s took Baron.%s Buff for about 3 minutes. Next Baron at %s." % (who, stolen, fmt_time(nxt)), P_URGENT, 15)
+                self.speak("%s took Baron.%s Buff for about 3 minutes. Next Baron at %s." % (who, stolen, fmt_time(nxt)), P_URGENT, 15,
+                           cat="objective", why=("Group and push a lane together while the buff lasts." if who == "We" else "Stay together and defend under your towers."))
             elif name == "HeraldKill":
                 self.spawns.pop("herald", None)
                 self.objectives.append({"t": et, "name": "herald", "who": who, "detail": ""})
-                self.speak("%s took Herald." % who, P_NORMAL)
+                self.speak("%s took Herald." % who, P_NORMAL, cat="objective")
             elif name in ("HordeKill", "VoidGrubKill"):
                 self.add_grub(et, who)
             elif name == "ChampionKill" and name_hit(ev.get("VictimName"), self.my_names):
@@ -1015,23 +1072,25 @@ class Coach:
                 team = ev.get("AcingTeam")
                 if team:
                     if team == self.my_team:
-                        self.speak("Ace. Their whole team is down. Take an objective.", P_URGENT)
+                        self.speak("Ace. Their whole team is down. Take an objective.", P_URGENT, cat="objective")
                     else:
-                        self.speak("We got aced. Reset together.", P_URGENT)
+                        self.speak("We got aced. Reset together.", P_URGENT, cat="objective")
             elif name == "InhibKilled":
                 if team is None:
-                    self.speak("An inhibitor fell.", P_LOW)
+                    self.speak("An inhibitor fell.", P_LOW, cat="objective")
                 elif who == "We":
-                    self.speak("We took an inhibitor. Push with the super minions.", P_LOW)
+                    self.speak("We took an inhibitor. Push with the super minions.", P_LOW, cat="objective")
                 else:
-                    self.speak("We lost an inhibitor. Clear the super minions.", P_NORMAL)
+                    self.speak("We lost an inhibitor. Clear the super minions.", P_NORMAL, cat="objective")
             elif name == "GameEnd":
                 self.game_over = True
                 winning = ev.get("WinningTeam")
                 if winning and self.my_team:
                     self.result = "win" if str(winning) == str(self.my_team) else "loss"
                 self.result = result_of(ev.get("Result")) or self.result
-                self.speak("Game over. %s" % focus_line(self), P_URGENT, 20)
+                self.card = self.report_card()
+                summary = review.spoken_summary(self.card)
+                self.speak(" ".join(x for x in ("Game over.", summary, focus_line(self)) if x), P_URGENT, 30)
 
     def on_dragon(self, ev, et, team, who):
         kind = (ev.get("DragonType") or "").strip()
@@ -1040,7 +1099,7 @@ class Coach:
         if kind.lower() == "elder":
             nxt = et + CONFIG["elder_respawn"]
             self.objectives.append({"t": et, "name": "elder", "who": who, "detail": ""})
-            self.speak("%s took Elder.%s Next Elder at %s." % (who, stolen, fmt_time(nxt)), P_URGENT, 15)
+            self.speak("%s took Elder.%s Next Elder at %s." % (who, stolen, fmt_time(nxt)), P_URGENT, 15, cat="objective")
         else:
             if team:
                 self.dragon_count[team] = self.dragon_count.get(team, 0) + 1
@@ -1051,11 +1110,12 @@ class Coach:
                 self.elder = True
                 nxt = et + CONFIG["elder_respawn"]
                 self.speak("%s took %s.%s %s soul. Elder at %s." % (
-                    who, label, stolen, "Our" if ours else "Their", fmt_time(nxt)), P_URGENT, 15)
+                    who, label, stolen, "Our" if ours else "Their", fmt_time(nxt)), P_URGENT, 15, cat="objective")
             else:
                 nxt = et + (CONFIG["elder_respawn"] if self.soul_team else CONFIG["dragon_respawn"])
                 self.speak("%s took %s.%s Dragons %d to %d. Next at %s." % (
-                    who, label, stolen, us, them, fmt_time(nxt)), P_NORMAL)
+                    who, label, stolen, us, them, fmt_time(nxt)), P_NORMAL, cat="objective",
+                    why="Each dragon is a permanent team buff; four gives soul.")
             self.objectives.append({"t": et, "name": "dragon", "who": who, "detail": kind})
         self.spawns["dragon"] = nxt
 
@@ -1092,7 +1152,7 @@ class Coach:
             "who": "We" if group["us"] >= group["them"] else "They",
             "detail": "%d-%d" % (group["us"], group["them"]),
         })
-        self.speak(line, P_NORMAL)
+        self.speak(line, P_NORMAL, cat="objective")
 
     def on_death(self, ev, et):
         self.deaths += 1
@@ -1111,15 +1171,15 @@ class Coach:
             msg += " %d seconds." % timer
         if self.t < 600 and self.deaths == 3:
             msg += " Three early deaths. Farm and stay alive for a bit."
-        self.speak(msg, P_URGENT, 10)
+        self.speak(msg, P_URGENT, 10, cat="death")
         pattern = self.fresh_pattern()
         if self.claude:
             self.claude_checkin(trigger="I just died to %s." % by)
         elif pattern:
-            self.speak(pattern, P_NORMAL, 20)
+            self.speak(pattern, P_NORMAL, 20, cat="reflect")
         elif self.deaths % 2 == 1:
             # A reflection question every other death; more than that becomes background noise.
-            self.speak(random.choice(DEATH_QUESTIONS), P_NORMAL, 20)
+            self.speak(random.choice(DEATH_QUESTIONS), P_NORMAL, 20, cat="reflect")
 
     # ----- clocks -------------------------------------------------------
     def objective_timers(self):
@@ -1129,7 +1189,8 @@ class Coach:
         for obj, at in (("grubs", CONFIG["grubs_despawn"]), ("herald", CONFIG["herald_despawn"])):
             if obj in self.spawns and prev < at <= self.t:
                 self.spawns.pop(obj, None)
-                self.speak("%s left the pit." % labels[obj], P_LOW)
+                self.speak("%s left the pit." % labels[obj], P_LOW, cat="objective")
+        self.back_timing(labels)
         for obj, at in list(self.spawns.items()):
             for warn in CONFIG["objective_warn_seconds"]:
                 mark = at - warn
@@ -1137,16 +1198,18 @@ class Coach:
                 if prev < mark <= self.t and key not in self.warned:
                     self.warned.add(key)
                     self.speak("%s in %d seconds." % (labels[obj], warn),
-                               P_URGENT if warn <= 30 else P_NORMAL, 8 if warn <= 30 else 12)
+                               P_URGENT if warn <= 30 else P_NORMAL, 8 if warn <= 30 else 12, cat="objective",
+                               why="Push your wave first, then walk over with your team." if warn > 30 else None)
             key = (obj, at, 0)
             if prev < at <= self.t and key not in self.warned:
                 self.warned.add(key)
                 verb = "are" if obj == "grubs" else "is"
-                self.speak("%s %s up." % (labels[obj], verb), P_URGENT, 10)
+                self.speak("%s %s up." % (labels[obj], verb), P_URGENT, 10, cat="objective")
         self.prev_t = self.t
 
     # ----- reads --------------------------------------------------------
     def enemy_comp(self):
+        """One read of the enemy team from what the loading screen shows: damage mix and threats."""
         if self.profile_done or self.t < 15:
             return
         self.profile_done = True
@@ -1160,11 +1223,132 @@ class Coach:
             else:
                 ad += 1
         if ap >= 4:
-            self.speak("Enemy comp is magic damage. %d AP threats. Magic resist goes a long way." % ap, P_NORMAL)
+            self.speak("Enemy comp is magic damage. %d AP threats. Magic resist goes a long way." % ap, P_NORMAL, cat="enemy")
         elif ad >= 4:
-            self.speak("Enemy comp is physical. %d AD threats. Armor goes a long way." % ad, P_NORMAL)
+            self.speak("Enemy comp is physical. %d AD threats. Armor goes a long way." % ad, P_NORMAL, cat="enemy")
         else:
-            self.speak("Enemy damage is mixed, %d AD and %d AP." % (ad, ap), P_LOW)
+            self.speak("Enemy damage is mixed, %d AD and %d AP." % (ad, ap), P_LOW, cat="enemy")
+        threat = self.threat_line()
+        if threat:
+            self.speak(threat, P_LOW, cat="enemy")
+        intro = self.lane_intro()
+        if intro and self.style == "beginner":
+            self.speak(intro, P_NORMAL, cat="enemy")
+        elif intro:
+            self.note(intro)
+
+    def threat_line(self):
+        tags = getattr(self.dd, "tags", None)
+        if not tags:
+            return ""
+        assassins = [p.get("championName") for p in self.enemies
+                     if "Assassin" in (tags(p) or []) and (tags(p) or [""])[0] != "Marksman"]
+        tanks = [p.get("championName") for p in self.enemies if "Tank" in (tags(p) or [])]
+        if len(assassins) >= 2:
+            return "They have %d assassins, %s. Ward your flanks and stay near your team." % (
+                len(assassins), " and ".join(assassins[:3]))
+        if len(tanks) >= 3:
+            return "They have %d tanks. Fights will go long; damage that shreds health helps." % len(tanks)
+        return ""
+
+    def lane_intro(self):
+        opp = self.lane_opponent()
+        tags = getattr(self.dd, "tags", None)
+        if not opp or not tags:
+            return ""
+        kinds = [t.lower() for t in (tags(opp) or [])]
+        if not kinds:
+            return ""
+        kind = kinds[0]
+        article = "an" if kind[0] in "aeiou" else "a"
+        return "You are laning against %s, %s %s." % (opp.get("championName"), article, kind)
+
+    def back_timing(self, labels):
+        """"Dragon in 90, good time to back": gold in pocket before an objective is wasted."""
+        lead = CONFIG["back_timing_seconds"]
+        if not self.me or self.me.get("isDead") or self.gold < CONFIG["back_timing_gold"]:
+            return
+        for obj, at in self.spawns.items():
+            if obj not in ("dragon", "baron", "grubs"):
+                continue
+            mark = at - lead
+            key = (obj, at)
+            if self.prev_t < mark <= self.t and key not in self.back_said:
+                self.back_said.add(key)
+                self.speak("%s in %d. You have %d gold. Good time to back and shop." % (
+                    labels[obj], lead, int(self.gold)), P_NORMAL, 20, cat="shop",
+                    why="Arrive with your items bought and your wave pushed.")
+                return
+
+    def vision_check(self):
+        """Control ward and vision score reminders, a few times a game at most."""
+        if self.t < 8 * 60 or self.me.get("isDead") or self.vision_said >= CONFIG["vision_reminders"]:
+            return
+        if self.t - self.last_vision < CONFIG["vision_check_every"]:
+            return
+        self.last_vision = self.t
+        has_control = any(isinstance(i, dict) and i.get("itemID") == CONTROL_WARD for i in as_list(self.me.get("items")))
+        score = scores_of(self.me).get("wardScore")
+        try:
+            per_min = float(score) / (self.t / 60.0) if score is not None else None
+        except (TypeError, ValueError):
+            per_min = None
+        low = per_min is not None and per_min < review.vision_target(norm_pos(self.me.get("position"))) * 0.6
+        if has_control and not low:
+            return
+        if low and not has_control:
+            line = "Vision score is low and you have no control ward. Buy one next back."
+        elif low:
+            line = "Vision score is low. Place your control ward and use your trinket."
+        else:
+            line = "No control ward. Grab one next back, it is 75 gold."
+        self.vision_said += 1
+        self.speak(line, P_LOW, cat="vision",
+                   why="Wards show who is coming. Most deaths come from the side you cannot see.")
+
+    def report_card(self):
+        if not self.me:
+            return {}
+        scores = scores_of(self.me)
+        team_kills = sum(int(_num(scores_of(p).get("kills"))) for p in self.players if p.get("team") == self.my_team)
+        big = [row for row in self.objectives if row.get("name") in ("dragon", "elder", "baron", "herald", "grubs")]
+        return review.report_card({
+            "minutes": self.t / 60.0,
+            "role": norm_pos(self.me.get("position")),
+            "cs": scores.get("creepScore", 0),
+            "kills": scores.get("kills", 0),
+            "deaths": scores.get("deaths", 0),
+            "assists": scores.get("assists", 0),
+            "team_kills": team_kills,
+            "ward_score": scores.get("wardScore"),
+            "objectives_us": sum(1 for row in big if row.get("who") == "We"),
+            "objectives_them": sum(1 for row in big if row.get("who") != "We"),
+            "cs_target": CONFIG["cs_target_per_min"],
+        })
+
+    # ----- hotkeys ------------------------------------------------------
+    def repeat_last(self):
+        """Ctrl+Shift+R: say the last voiced callout again."""
+        if self.last_voiced:
+            self.say(self.last_voiced, priority=P_URGENT, ttl=10)
+        else:
+            self.say("Nothing to repeat yet.", priority=P_URGENT, ttl=10)
+
+    def whats_next(self):
+        """Ctrl+Shift+N: next objective, and what to buy next."""
+        parts = []
+        if self.me:
+            upcoming = sorted((at - self.t, obj) for obj, at in self.spawns.items())
+            if upcoming:
+                remain, obj = upcoming[0]
+                label = {"dragon": "Elder" if self.soul_team else "Dragon", "grubs": "Void grubs",
+                         "herald": "Herald", "baron": "Baron"}.get(obj, obj)
+                parts.append("%s is up." % label if remain <= 0 else "%s in %s." % (label, fmt_time(remain)))
+            for line in self.shop_lines:
+                if line.upper().startswith("NEXT"):
+                    parts.append("Buy next: %s." % line.split(":", 1)[-1].strip().rstrip("."))
+                    break
+        self.say(" ".join(parts) or "No game yet.", priority=P_URGENT, ttl=10)
 
     def enemy_items(self):
         opp = self.lane_opponent()
@@ -1191,9 +1375,9 @@ class Coach:
                     continue
                 # Voice only the threats that matter to you. The rest stays on the overlay.
                 if player is opp or player is fed:
-                    self.speak(label, P_LOW)
+                    self.speak(label, P_LOW, cat="enemy")
                 else:
-                    self.speak(label, P_QUIET)
+                    self.speak(label, P_QUIET, cat="enemy")
 
     def levels(self):
         try:
@@ -1202,7 +1386,8 @@ class Coach:
             my_level = 0
         if not self.me6 and my_level >= 6:
             self.me6 = True
-            self.speak("Level 6. Ult is online.", P_NORMAL)
+            self.speak("Level 6. Ult is online.", P_NORMAL, cat="enemy",
+                       why="Fights you could not win before may be winnable now.")
         opp = self.lane_opponent()
         if not self.opp6 and opp:
             try:
@@ -1214,7 +1399,8 @@ class Coach:
                 label = "Their %s just hit 6. Respect the ult." % opp.get("championName")
                 self.spikes.append(label)
                 self.spikes = self.spikes[-8:]
-                self.speak(label, P_NORMAL)
+                self.speak(label, P_NORMAL, cat="enemy",
+                           why="Their all-in just got stronger. Play a step back until you see it used.")
 
     def cs_check(self):
         if norm_pos(self.me.get("position")) == "UTILITY" or self.t < 150:
@@ -1233,15 +1419,16 @@ class Coach:
         if self._cs_is_stuck():
             if self.t - self.last_stuck >= 600:
                 self.last_stuck = self.t
-                self.speak("CS is under 5 and a half a minute. Catch waves before you fight.", P_NORMAL)
+                self.speak("CS is under 5 and a half a minute. Catch waves before you fight.", P_NORMAL, cat="farm")
             return
         msg = "%d minutes, %d CS. %.1f a minute." % (int(self.t // 60), cs, rate)
         self.cs_checks = getattr(self, "cs_checks", 0) + 1
         if rate < target - 1.5:
-            self.speak(msg + " Target is %g." % target, P_LOW if self.cs_checks % 2 == 1 else P_QUIET)
+            self.speak(msg + " Target is %g." % target, P_LOW if self.cs_checks % 2 == 1 else P_QUIET, cat="farm",
+                       why="Each wave is about 125 gold. Last-hit before you trade.")
         else:
             # On pace: say it now and then, otherwise just show it.
-            self.speak(msg, P_LOW if self.cs_checks % 3 == 1 else P_QUIET)
+            self.speak(msg, P_LOW if self.cs_checks % 3 == 1 else P_QUIET, cat="farm")
 
     def gold_bank(self, active):
         try:
@@ -1253,7 +1440,8 @@ class Coach:
         if self.t - self.last_gold_bank < CONFIG["gold_bank_cooldown"]:
             return
         self.last_gold_bank = self.t
-        self.speak("%d gold banked." % int(gold), P_LOW)
+        self.speak("%d gold banked." % int(gold), P_LOW, cat="shop",
+                   why="Gold in your pocket does nothing. Back and buy when your wave is pushed.")
 
     def gold_diff(self):
         """Every five minutes, the item-gold lead averaged over the last three samples.
@@ -1273,7 +1461,12 @@ class Coach:
             line = "Item gold is about even."
         else:
             line = "Item gold %s about %.1fk." % ("up" if diff > 0 else "down", abs(diff) / 1000.0)
-        self.speak(line, P_LOW)
+        why = None
+        if diff <= -750:
+            why = "Play safe, farm, and fight next to your team."
+        elif diff >= 750:
+            why = "Turn the lead into towers and dragons, not just kills."
+        self.speak(line, P_LOW, cat="macro", why=why)
 
     # ----- optional LLM -------------------------------------------------
     def claude_checkin(self, periodic=False, trigger=None):
@@ -1356,7 +1549,7 @@ class Coach:
         self.shop_said[key] = said + [self.t]
         self.last_shop_key = key
         self.last_shop_said = self.t
-        self.speak(advice["speak"], P_NORMAL, 30)
+        self.speak(advice["speak"], P_NORMAL, 30, cat="shop")
 
     def _pattern_state(self):
         return {
@@ -1398,7 +1591,7 @@ class Coach:
             return
         line = self.fresh_pattern()
         if line:
-            self.speak(line, P_NORMAL, 20)
+            self.speak(line, P_NORMAL, 20, cat="macro")
 
     # ----- UI -----------------------------------------------------------
     def publish(self):
@@ -1432,6 +1625,8 @@ class Coach:
             "shop": ([self.guidance] if self.guidance else []) + list(self.shop_lines),
             "in_game": True,
             "version": __version__,
+            "style": self.style,
+            "card": dict(self.card),
         }
         self.last_ui_diff = diff
         self.bus.publish(state)
@@ -1683,6 +1878,7 @@ def write_match_report(coach, reason, folder=None):
     kda = "%s/%s/%s" % (scores.get("kills", 0), scores.get("deaths", 0), scores.get("assists", 0))
     focus = focus_line(coach)
     us, them = coach.dragons() if coach.my_team else (0, 0)
+    card = coach.card or (coach.report_card() if coach.me else {})
     lines = [
         "---",
         "type: rift-coach-match",
@@ -1692,6 +1888,8 @@ def write_match_report(coach, reason, folder=None):
         "result: %s" % (coach.result or "unknown"),
         "kda: %s" % kda,
         "game_id: %s" % (coach.game_id or "unknown"),
+        "minutes: %d" % int(coach.t // 60),
+        "grades: %s" % review.encode(card),
         "reason: %s" % reason,
         "---",
         "",
@@ -1699,8 +1897,18 @@ def write_match_report(coach, reason, folder=None):
         "",
         "KDA %s. Game time %s. Dragons %d to %d." % (kda, fmt_time(coach.t), us, them),
         "",
-        "## CS",
     ]
+    if card:
+        lines.append("## Report card")
+        for area in review.AREAS:
+            if area in card:
+                lines.append("- %s: **%s** (%s)" % (review.AREA_NAMES[area], card[area]["grade"], card[area]["detail"]))
+        _best, worst = review.best_and_worst(card)
+        if worst:
+            lines.append("")
+            lines.append("Tip for %s: %s" % (review.AREA_NAMES[worst].lower(), review.TIPS[worst]))
+        lines.append("")
+    lines.append("## CS")
     if coach.cs_marks:
         for mark in (10, 15, 20):
             if mark in coach.cs_marks:
@@ -1961,6 +2169,12 @@ def build_arg_parser():
     parser.add_argument("--web", action="store_true", help="serve panels on 127.0.0.1:8765 only")
     parser.add_argument("--log", action="store_true", help="append callouts to logs/")
     parser.add_argument("--me", help="summoner name if auto-detect fails")
+    parser.add_argument("--style", choices=STYLES, default="standard",
+                        help="beginner explains why; pro keeps voice to decisions only")
+    parser.add_argument("--mute", action="append", default=[], choices=sorted(CATEGORIES), metavar="KIND",
+                        help="voice off for one kind of callout (repeatable): %s" % ", ".join(sorted(CATEGORIES)))
+    parser.add_argument("--voice-name", default="", help='voice to use, e.g. "studio:en_US-norman-medium" or a Windows voice name')
+    parser.add_argument("--no-hotkeys", action="store_true", help="skip Ctrl+Shift+R (repeat) and Ctrl+Shift+N (next)")
     parser.add_argument("--version", action="version", version="Macro Goblin %s" % __version__)
     return parser
 
@@ -1984,6 +2198,9 @@ class SessionOptions:
         self.me = kw.get("me") or None
         self.claude = kw.get("claude", False)
         self.cs_target = kw.get("cs_target")
+        self.coach_style = kw.get("coach_style", "standard")
+        self.muted = list(kw.get("muted") or [])
+        self.hotkeys = kw.get("hotkeys", False)
 
 
 class CoachSession:
@@ -2042,7 +2259,8 @@ class CoachSession:
                 print("Claude mode on (%s)." % CONFIG["claude_model"], flush=True)
             else:
                 print("ANTHROPIC_API_KEY not set - running without Claude mode.", flush=True)
-        self.coach = Coach(self.speaker, None, claude, bus=self.bus, me_name=opts.me)
+        self.coach = Coach(self.speaker, None, claude, bus=self.bus, me_name=opts.me,
+                           style=opts.coach_style, muted=opts.muted)
         self.speaker.clock = lambda: self.coach.t
         client = self._client()
         capture = Capture(data_path("captures")) if (opts.capture and self.client_kind == "live") else None
@@ -2063,11 +2281,25 @@ class CoachSession:
 
         self.worker = threading.Thread(target=work, name="coach-poll", daemon=True)
         self.worker.start()
+        if opts.hotkeys:
+            try:
+                import winplat
+                winplat.global_hotkeys(self.on_hotkey, self.stop_event)
+            except Exception as exc:
+                print("Hotkeys unavailable (%s)." % exc, flush=True)
         if opts.web:
             import web_dash
             threading.Thread(target=web_dash.serve, args=(self.bus, self.stop_event),
                              name="coach-web", daemon=True).start()
         return self
+
+    def on_hotkey(self, name):
+        if not self.coach:
+            return
+        if name == "repeat":
+            self.coach.repeat_last()
+        elif name == "next":
+            self.coach.whats_next()
 
     def stop(self, timeout=5.0):
         self.stop_event.set()
@@ -2091,7 +2323,8 @@ def main(argv=None):
     options = SessionOptions(
         demo=args.demo, synthetic=args.synthetic, replay=args.replay, speed=args.speed,
         voice=not args.no_voice, capture=args.capture, log=args.log, web=args.web,
-        me=args.me, claude=args.claude,
+        me=args.me, claude=args.claude, coach_style=args.style, muted=args.mute,
+        voice_name=args.voice_name, hotkeys=not args.no_hotkeys,
     )
     session = CoachSession(options).start()
     try:

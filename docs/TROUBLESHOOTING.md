@@ -30,19 +30,18 @@ python lol_coach.py --overlay-edit
 
 ## No voice
 
-- Run:
+- In the app, press **Test** next to the voice picker. The status line says which voice played ("Studio voice (Kristin)" or "Windows voice").
+- Check the Windows volume mixer: the studio voice plays as **Macro Goblin**, the Windows voice as **Windows PowerShell**.
+- Run the doctor from the install folder. The **Studio voice** row synthesizes a test line:
 
 ```bat
-python tests\voice_check.py
+MacroGoblinCLI.exe --doctor
 ```
 
-- Or run without voice:
-
-```bat
-python lol_coach.py --overlay --no-voice
-```
-
-On Windows, voice uses PowerShell/System.Speech. If that fails, the app keeps printing callouts.
+- If the studio voice fails, the coach switches to your Windows voice automatically and keeps going. If you prefer the Windows voice, pick it in the voice menu.
+- Running from source: `python tools/fetch_voice.py` downloads the studio voice into `voice\`. Without it, source runs use the Windows voice.
+- Quiet or muted kinds of calls: check **Spoken callouts** and **Coach style** (Pro keeps routine calls on the overlay only).
+- Or run without voice: `python lol_coach.py --overlay --no-voice`. Callouts keep printing either way.
 
 ## Coach restarted mid-game / went quiet briefly
 

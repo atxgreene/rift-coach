@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.2.0 - 2026-09-29
+
+### New
+- **Studio voice.** A natural-sounding neural voice (Piper) now ships inside the app and runs entirely on your PC: no account, no internet, no cost. It is the default, and it keeps the same rules as before (urgent lines first, late lines dropped). Lines are cached, so repeated calls like "Dragon in 60" play instantly. A second studio voice (Norman) is one click away in the voice menu, and your Windows voices are still listed. If the studio voice ever fails, the coach switches to the Windows voice mid-game instead of going silent.
+- **Coach style: Beginner, Standard or Pro.**
+  - **Beginner** adds a short reason the first couple of times a kind of call comes up ("Dragon in 60 seconds. Push your wave first, then walk over with your team.") and says who you are laning against.
+  - **Standard** is the coach you know.
+  - **Pro** only speaks calls that change a decision now; about 35% less talking. Everything else stays on the overlay.
+- **Choose what gets spoken.** Mute any kind of callout (objectives, deaths, death questions, items and gold, CS, enemy spikes, vision, macro reads). Muted lines still show on the overlay and in your notes.
+- **Report card after every game.** Farming, fighting (kill participation), survival, vision and objectives, graded A to D from the scoreboard. The game-over line says your best area and the one to work on. Remakes are not graded.
+- **Your trends** in the app: your record over the last 20 games, win streaks, best champions, average grade in each area, and a tip for your weakest one.
+- **Quick keys.** `Ctrl+Shift+R` repeats the last callout; `Ctrl+Shift+N` says the next objective and what to buy next. These use the same Windows hotkey call as the overlay (no keyboard hook).
+- **New in-game calls:**
+  - Back timing: "Dragon in 90. You have 1,400 gold. Good time to back and shop."
+  - Control ward and vision score reminders, three a game at most.
+  - A threat read at the start: "They have 2 assassins, Zed and Kha'Zix. Ward your flanks and stay near your team."
+- **Command line:** `--style`, `--mute KIND`, `--voice-name` and `--no-hotkeys`.
+
+### Release engineering
+- The Windows build downloads Piper and the voice model with pinned SHA-256 checksums.
+- The smoke test fails unless the built app actually synthesizes speech (`--doctor` now checks the studio voice).
+- CI runs real Piper synthesis tests on Windows.
+
 ## 1.1.0 - 2026-09-29
 
 Macro Goblin is now a Windows app with an installer.
