@@ -245,7 +245,7 @@ class LauncherApp:
         y = max(0, (root.winfo_screenheight() - height) // 3)
         root.geometry("%dx%d+%d+%d" % (width, height, x, y))
         root.resizable(False, False)  # the window always fits its content
-        root.protocol("WM_DELETE_WINDOW", self.quit)
+        root.protocol("WM_DELETE_WINDOW", self.request_close)
         root.deiconify()
         winplat.dark_title_bar(root)
         if args.minimized:
@@ -827,6 +827,16 @@ class LauncherApp:
             self.flash_status("Something went wrong in the window. Details were saved to the logs folder.")
         except Exception:
             pass
+
+    def request_close(self):
+        """Closing mid-match stops your coach, so ask first. Otherwise close right away."""
+        live = self.session is not None and not getattr(self, "demo_mode", False) and self.bus.snapshot().get("in_game")
+        if live:
+            from tkinter import messagebox
+            if not messagebox.askyesno(TITLE, "You're in a match. Closing Macro Goblin stops the coach and the "
+                                              "overlay.\n\nClose anyway?", icon="warning", parent=self.root):
+                return
+        self.quit()
 
     def quit(self):
         if self.closing:
