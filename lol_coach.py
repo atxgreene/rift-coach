@@ -633,7 +633,9 @@ def game_key(data):
     ids = []
     for player in as_list((data or {}).get("allPlayers")):
         if isinstance(player, dict):
-            ids.append(str(player.get("riotId") or player.get("summonerName") or player.get("championName") or ""))
+            # Players plus their champions: the same premade playing twice still gets two notes.
+            ids.append("%s/%s" % (player.get("riotId") or player.get("summonerName") or "",
+                                  player.get("championName") or ""))
     if not ids:
         return None
     return hashlib.sha1("|".join(sorted(ids)).encode("utf-8")).hexdigest()[:8]
