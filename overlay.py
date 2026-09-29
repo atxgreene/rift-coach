@@ -314,6 +314,10 @@ def run(bus, stop, edit=False, master=None):
     fade = CONFIG["overlay"].get("callout_fade_seconds", 12)
 
     root = tk.Toplevel(master) if master is not None else tk.Tk()
+    # Fonts are in points and grow with display scaling; pixel sizes must grow with them.
+    dpi = max(1.0, root.winfo_fpixels("1i") / 96.0)
+    width = int(width * dpi)
+    height = int(height * dpi)
     root.title("Macro Goblin Overlay")
     root.overrideredirect(True)
     root.attributes("-topmost", True)
@@ -659,6 +663,10 @@ def run(bus, stop, edit=False, master=None):
     root.after(100, refresh)
     root.after(50, poll_hotkey)
     root._image_refs = image_refs  # Tk images vanish when their last Python reference goes away
+    root.update_idletasks()
+    if shell.winfo_reqheight() > height:  # never cut off the bottom of the card
+        height = shell.winfo_reqheight()
+        root.geometry("%dx%d" % (width, height))
     if master is not None:
         return root
     try:

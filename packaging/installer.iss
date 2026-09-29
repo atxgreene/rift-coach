@@ -46,6 +46,7 @@ SolidCompression=yes
 AppMutex=MacroGoblinSingleInstance
 CloseApplications=yes
 RestartApplications=no
+UsePreviousTasks=no
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"

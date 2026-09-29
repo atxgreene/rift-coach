@@ -9,6 +9,7 @@ import argparse
 import datetime
 import glob
 import os
+import queue
 import re
 import subprocess
 import sys
@@ -210,6 +211,9 @@ class LauncherApp:
         self.report_rows = None
         self.closing = False
         self.pending_installer = None
+        self.ui_queue = queue.Queue()   # background threads hand UI work to tick() through this
+        self.downloading = False
+        self.log_path = lol_coach.data_path("logs", time.strftime("coach-%Y%m%d-%H%M%S.log"))
 
         winplat.enable_dpi_awareness()
         winplat.set_app_user_model_id()
@@ -524,7 +528,8 @@ class LauncherApp:
         return lol_coach.SessionOptions(
             demo=demo, speed=12 if demo else 10, voice=s["voice"], voice_name=s["voice_name"],
             voice_rate=s["voice_rate"], voice_volume=s["voice_volume"], capture=s["capture"] and not demo,
-            log=not demo, web=s["web"], me=s["summoner"] or None, cs_target=s["cs_target"],
+            log=not demo, log_path=self.log_path, web=s["web"], me=s["summoner"] or None,
+            cs_target=s["cs_target"],
         )
 
     def start_session(self, demo=False):
@@ -532,10 +537,13 @@ class LauncherApp:
         self.session = lol_coach.CoachSession(self.options(demo=demo), bus=self.bus).start()
         self.demo_mode = demo
 
-    def stop_session(self):
+    def stop_session(self, wait=False):
         if self.session:
             session, self.session = self.session, None
-            session.stop(timeout=6)
+            if wait:
+                session.stop(timeout=6)   # on quit: make sure the match note is written
+            else:
+                session.stop_in_background()
             lol_coach.publish_idle(self.bus)
 
     def restart_session(self):
@@ -603,9 +611,22 @@ class LauncherApp:
         self.dot.delete("all")
         self.dot.create_oval(1, 1, self.px(11), self.px(11), fill=color, outline="")
 
+    def ui(self, fn):
+        """Run fn on the Tk thread. Safe to call from any thread, even while closing."""
+        self.ui_queue.put(fn)
+
     def tick(self):
         if self.closing:
             return
+        while True:
+            try:
+                fn = self.ui_queue.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                fn()
+            except Exception:
+                write_crash(*sys.exc_info())
         try:
             self.refresh_status()
             if time.time() - self.last_reports_scan > 4:
@@ -721,19 +742,21 @@ class LauncherApp:
             release = updates.latest_release()
         except Exception:
             if manual:
-                self.root.after(0, lambda: self.flash_status("Couldn't reach GitHub to check for updates."))
+                self.ui(lambda: self.flash_status("Couldn't reach GitHub to check for updates."))
             return
         if updates.newer_than_current(release):
             self.release = release
-            self.root.after(0, self.show_banner)
+            self.ui(self.show_banner)
         elif manual:
-            self.root.after(0, lambda: self.flash_status("You're on the latest version (%s)." % lol_coach.__version__))
+            self.ui(lambda: self.flash_status("You're on the latest version (%s)." % lol_coach.__version__))
 
     def manual_update_check(self):
         threading.Thread(target=lambda: self.check_updates(manual=True), daemon=True).start()
 
     def show_banner(self):
         tk, px = self.tk, self.px
+        if self.downloading:
+            return  # never rebuild the banner (and its button) mid-download
         if self.banner_inner is not None:
             self.banner_inner.destroy()
         self.banner.pack(fill="x", padx=px(18), pady=(0, px(12)), after=self.header)
@@ -743,28 +766,43 @@ class LauncherApp:
         self.banner_text = tk.Label(inner, text="Macro Goblin %s is out." % self.release["version"], bg=RAISED,
                                     fg=GOLD_HI, font=self.f_bold)
         self.banner_text.pack(side="left")
-        self.btn_update = Button(inner, "Update now" if lol_coach.FROZEN else "See what's new", self.run_update,
+        self.btn_update = Button(inner, "Update now" if self.can_self_update() else "See what's new", self.run_update,
                                  px, self.f_small, kind="primary", bg=RAISED)
         self.btn_update.canvas.pack(side="right")
         self.fit_height()
 
+    def can_self_update(self):
+        """Only the installed app updates itself. Source checkouts and the portable zip open the release page."""
+        installed = os.path.exists(os.path.join(os.path.dirname(sys.executable), "unins000.exe"))
+        return lol_coach.FROZEN and installed and bool(self.release and self.release.get("installer"))
+
     def run_update(self):
-        if not lol_coach.FROZEN or not self.release.get("installer"):
+        if not self.can_self_update():
             winplat.open_url(self.release["url"])
             return
+        if self.downloading:
+            return
+        self.downloading = True
         self.btn_update.set_enabled(False)
         self.banner_text.configure(text="Downloading %s..." % self.release["version"])
+        version = self.release["version"]
+
+        def progress(fraction):
+            self.ui(lambda: self.banner_text.configure(text="Downloading %s... %d%%" % (version, int(fraction * 100))))
 
         def work():
             try:
-                path = updates.download_installer(
-                    self.release, progress=lambda f: self.root.after(0, lambda: self.banner_text.configure(
-                        text="Downloading %s... %d%%" % (self.release["version"], int(f * 100)))))
+                path = updates.download_installer(self.release, progress=progress)
             except Exception as exc:
-                self.root.after(0, lambda: (self.banner_text.configure(text="Update failed: %s" % exc),
-                                            self.btn_update.set_enabled(True)))
+                message = "Update failed: %s" % exc
+
+                def failed():
+                    self.downloading = False
+                    self.banner_text.configure(text=message)
+                    self.btn_update.set_enabled(True)
+                self.ui(failed)
                 return
-            self.root.after(0, lambda: self.install_and_quit(path))
+            self.ui(lambda: self.install_and_quit(path))
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -790,7 +828,7 @@ class LauncherApp:
         self.closing = True
         try:
             self.show_overlay(False)
-            self.stop_session()
+            self.stop_session(wait=True)
         finally:
             self.root.destroy()
 
@@ -840,7 +878,10 @@ def main(argv=None):
     app.run()
     if app.pending_installer:
         winplat.release_single_instance()
-        subprocess.Popen([app.pending_installer, "/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART"], close_fds=True)
+        env = dict(os.environ, PYINSTALLER_RESET_ENVIRONMENT="1")  # the relaunched app starts clean
+        # /TASKS= keeps the person's own choices: no desktop icon or autostart re-added on update.
+        subprocess.Popen([app.pending_installer, "/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/TASKS="],
+                         close_fds=True, env=env)
     return 0
 
 

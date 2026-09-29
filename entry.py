@@ -16,7 +16,10 @@ def _quiet_streams():
         import lol_coach
         folder = lol_coach.data_path("logs")
         os.makedirs(folder, exist_ok=True)
-        stream = open(os.path.join(folder, "app.log"), "w", encoding="utf-8", buffering=1)
+        path = os.path.join(folder, "app.log")
+        if os.path.exists(path) and os.path.getsize(path) > 1_000_000:
+            os.replace(path, path + ".old")  # keep it small; never wipe a running copy's log
+        stream = open(path, "a", encoding="utf-8", buffering=1)
         sys.stdout = sys.stdout or stream
         sys.stderr = sys.stderr or stream
     except Exception:

@@ -36,9 +36,16 @@ def load():
             saved = json.load(handle)
         if isinstance(saved, dict):
             for key, value in saved.items():
-                if key in DEFAULTS and isinstance(value, type(DEFAULTS[key])) or (
-                    key in DEFAULTS and isinstance(DEFAULTS[key], float) and isinstance(value, (int, float))
-                ):
+                if key not in DEFAULTS:
+                    continue
+                default = DEFAULTS[key]
+                if isinstance(default, bool):
+                    ok = isinstance(value, bool)
+                elif isinstance(default, (int, float)):
+                    ok = isinstance(value, (int, float)) and not isinstance(value, bool)
+                else:
+                    ok = isinstance(value, type(default))
+                if ok:
                     data[key] = value
     except (OSError, ValueError):
         pass

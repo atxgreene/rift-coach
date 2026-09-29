@@ -108,6 +108,27 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          python packaging/release_notes.py | Set-Content -Encoding utf8 release-notes.md
-          gh release create "$env:GITHUB_REF_NAME" dist/MacroGoblin-Setup.exe dist/MacroGoblin-Portable.zip dist/SHA256SUMS.txt `
-            --title "Macro Goblin ${{ steps.v.outputs.version }}" --notes-file release-notes.md --latest
+          python packaging/release_notes.py release-notes.md
+          $files = 'dist/MacroGoblin-Setup.exe', 'dist/MacroGoblin-Portable.zip', 'dist/SHA256SUMS.txt'
+          gh release view "$env:GITHUB_REF_NAME" *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload "$env:GITHUB_REF_NAME" @files --clobber
+            gh release edit "$env:GITHUB_REF_NAME" --notes-file release-notes.md --latest
+          } else {
+            gh release create "$env:GITHUB_REF_NAME" @files --title "Macro Goblin ${{ steps.v.outputs.version }}" `
+              --notes-file release-notes.md --latest
+          }
+          if ($LASTEXITCODE -ne 0) { throw "publishing the release failed" }
+
+      - name: Verify the one-line installer against the published release
+        if: startsWith(github.ref, 'refs/tags/v')
+        timeout-minutes: 6
+        run: |
+          Start-Sleep 20   # let the release assets settle on the CDN
+          $app = Join-Path $env:LOCALAPPDATA "Programs\Macro Goblin"
+          Get-Content -Raw docs/install.ps1 | Invoke-Expression
+          if (-not (Test-Path "$app\MacroGoblin.exe")) { throw "one-line install did not install the app" }
+          $v = & "$app\MacroGoblinCLI.exe" --version
+          if ($v -notmatch "${{ steps.v.outputs.version }}") { throw "installed $v, expected ${{ steps.v.outputs.version }}" }
+          Get-Process MacroGoblin -ErrorAction SilentlyContinue | Stop-Process -Force
+          Write-Output "one-line install OK: $v"

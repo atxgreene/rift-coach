@@ -1916,6 +1916,7 @@ class SessionOptions:
         self.voice_volume = kw.get("voice_volume", 100)
         self.capture = kw.get("capture", False)
         self.log = kw.get("log", False)
+        self.log_path = kw.get("log_path")
         self.web = kw.get("web", False)
         self.me = kw.get("me") or None
         self.claude = kw.get("claude", False)
@@ -1964,7 +1965,7 @@ class CoachSession:
         self.speaker = Speaker(voice=opts.voice, voice_name=opts.voice_name,
                                rate=opts.voice_rate, volume=opts.voice_volume)
         if opts.log:
-            log_path = data_path("logs", time.strftime("coach-%Y%m%d-%H%M%S.log"))
+            log_path = opts.log_path or data_path("logs", time.strftime("coach-%Y%m%d-%H%M%S.log"))
             try:
                 self.speaker.enable_log(log_path)
                 print("Logging callouts to %s" % log_path, flush=True)
@@ -1987,7 +1988,10 @@ class CoachSession:
         def work():
             try:
                 self.coach.dd = DataDragon()  # can take a few seconds on a new patch; off the UI thread
-                run_loop(opts, self.speaker, self.coach, client, capture, self.stop_event)
+                if self.stop_event.is_set():
+                    return  # stopped while loading; do not publish over a newer session
+                run_loop(opts, self.speaker, self.coach, client, capture, self.stop_event,
+                         sleep=self.stop_event.wait)
             except Exception as exc:  # never die silently
                 self.error = "%s: %s" % (type(exc).__name__, exc)
                 print("Coach stopped: %s" % self.error, flush=True)
@@ -2008,6 +2012,11 @@ class CoachSession:
             self.worker.join(timeout)
         if self.speaker:
             self.speaker.close()
+
+    def stop_in_background(self):
+        """Stop without blocking the caller (the UI thread). The match note is still written."""
+        self.stop_event.set()
+        threading.Thread(target=self.stop, name="coach-stop", daemon=True).start()
 
 
 def main(argv=None):

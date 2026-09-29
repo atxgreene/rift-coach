@@ -18,7 +18,7 @@ if marker in text:
     section = section.split("\n## ", 1)[0]
     section = section.split("\n", 1)[1] if "\n" in section else ""
 
-print("""## Install
+notes = ("""## Install
 
 **Windows installer (recommended):** download **MacroGoblin-Setup.exe** below and run it. No admin rights needed.
 
@@ -35,3 +35,9 @@ Set League to **Borderless** (Settings > Video > Window Mode) so the overlay can
 
 ## What's new in %s
 %s""" % (version, section.strip()))
+out = sys.argv[1] if len(sys.argv) > 1 else None
+if out:
+    with open(out, "w", encoding="utf-8") as handle:  # UTF-8 regardless of the console code page
+        handle.write(notes)
+else:
+    sys.stdout.buffer.write(notes.encode("utf-8"))
