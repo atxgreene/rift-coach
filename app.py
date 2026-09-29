@@ -20,6 +20,7 @@ import traceback
 import lol_coach
 import settings as settings_store
 import updates
+import voice as studio_voice
 import winplat
 
 TITLE = "Macro Goblin"
@@ -456,9 +457,14 @@ class LauncherApp:
 
     # ----- settings
     def voice_display(self):
-        name = self.settings.get("voice_name") or "Default voice"
-        name = name.replace("Microsoft ", "").replace(" Desktop", "")
-        return "%s  ▾" % name
+        name = self.settings.get("voice_name") or ""
+        if studio_voice.is_studio(name) or (not name and studio_voice.available()):
+            vid = studio_voice.resolve(name)
+            if vid:
+                return "\u2605 %s (Studio)  \u25be" % studio_voice.label(vid)
+            name = ""
+        name = (name or "Default voice").replace("Microsoft ", "").replace(" Desktop", "")
+        return "%s  \u25be" % name
 
     def paint_speeds(self):
         current = int(self.settings.get("voice_rate", 1))
@@ -478,13 +484,54 @@ class LauncherApp:
         tk = self.tk
         menu = tk.Menu(self.root, tearoff=0, bg=RAISED, fg=TEXT, activebackground=GOLD, activeforeground=BG,
                        font=self.f_small, bd=0)
-        choices = [""] + list(self.voices)
-        for name in choices:
+        studio = studio_voice.installed()
+        if studio:
+            menu.add_command(label="Studio voices (natural, offline)", state="disabled")
+            for vid in studio:
+                desc = studio_voice.VOICES.get(vid, ("", ""))[1]
+                menu.add_command(label="  \u2605 %s  %s" % (studio_voice.label(vid), desc),
+                                 command=lambda v=vid: self.set_voice(studio_voice.PREFIX + v))
+            for vid, row in studio_voice.VOICES.items():
+                if vid not in studio and studio_voice.piper_exe():
+                    menu.add_command(label="  + Get %s  %s (%d MB)" % (row[0], row[1], row[4]),
+                                     command=lambda v=vid: self.get_voice(v))
+            menu.add_separator()
+            menu.add_command(label="Windows voices", state="disabled")
+        for name in list(self.voices) or ([] if studio else [""]):
             label = (name or "Default voice").replace("Microsoft ", "").replace(" Desktop", "")
-            menu.add_command(label=label, command=lambda n=name: self.set_voice(n))
+            menu.add_command(label="  " + label, command=lambda n=name: self.set_voice(n))
         if not self.voices:
-            menu.add_command(label="(more voices: Windows Settings > Time & language > Speech)", state="disabled")
+            menu.add_command(label="  (more voices: Windows Settings > Time & language > Speech)", state="disabled")
         menu.tk_popup(event.x_root, event.y_root)
+
+    def get_voice(self, vid):
+        if getattr(self, "voice_download", None):
+            return
+        self.voice_download = vid
+        name = studio_voice.label(vid)
+        self.flash_status("Downloading the %s voice..." % name)
+
+        def progress(frac):
+            self.ui(lambda f=frac: self.voice_label.configure(text="Downloading %s  %d%%" % (name, f * 100)))
+
+        def work():
+            try:
+                studio_voice.download_voice(vid, progress)
+                self.ui(lambda: self.voice_ready(vid, None))
+            except Exception as exc:
+                msg = "%s" % type(exc).__name__
+                self.ui(lambda m=msg: self.voice_ready(vid, m))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def voice_ready(self, vid, error):
+        self.voice_download = None
+        if error:
+            self.voice_label.configure(text=self.voice_display())
+            self.flash_status("Couldn't download that voice (%s). Check your connection." % error)
+            return
+        self.flash_status("%s is ready." % studio_voice.label(vid))
+        self.set_voice(studio_voice.PREFIX + vid)
 
     def set_voice(self, name):
         self.settings["voice_name"] = name
@@ -495,6 +542,7 @@ class LauncherApp:
         speaker = self.session.speaker if self.session and self.session.speaker else None
         if speaker and speaker.mode:
             speaker.say("Macro Goblin here. Dragon in 60 seconds.", lol_coach.P_URGENT)
+            self.flash_status("Playing: %s" % speaker.engine)
         else:
             self.flash_status("Voice is off. Turn on Voice callouts to hear it.")
 

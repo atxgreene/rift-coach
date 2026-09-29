@@ -44,6 +44,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install "pyinstaller==6.*" pillow
+          python tools/fetch_voice.py --platform win
           python packaging/make_version_info.py
           pyinstaller packaging/macrogoblin.spec --noconfirm --clean
           Get-ChildItem dist/MacroGoblin | Select-Object Name, Length | Format-Table | Out-String | Write-Output
@@ -55,8 +56,10 @@ jobs:
           $ver = & "$d/MacroGoblinCLI.exe" --version
           Write-Output $ver
           if ($ver -notmatch "${{ steps.v.outputs.version }}") { throw "wrong version: $ver" }
-          & "$d/MacroGoblinCLI.exe" --doctor
+          $doc = & "$d/MacroGoblinCLI.exe" --doctor | Out-String
+          Write-Output $doc
           if ($LASTEXITCODE -ne 0) { throw "doctor reported a setup problem" }
+          if ($doc -notmatch '\[OK\] Studio voice') { throw "studio voice did not synthesize in the built app" }
           $out = & "$d/MacroGoblinCLI.exe" --demo --speed 600 --no-voice | Out-String
           if ($out -notmatch 'Replay complete') { Write-Output $out; throw "demo replay did not finish" }
           if ($out -notmatch 'Game over') { Write-Output $out; throw "demo did not reach game over" }

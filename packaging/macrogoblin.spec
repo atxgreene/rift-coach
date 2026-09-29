@@ -17,11 +17,19 @@ datas += [
     (os.path.join(ROOT, "tests", "fixtures", "ddragon.json.gz"), os.path.join("tests", "fixtures")),
 ]
 
+# Studio voice (Piper + bundled model), fetched by tools/fetch_voice.py. Required for release builds.
+VOICE = os.path.join(ROOT, "voice")
+if not os.path.isfile(os.path.join(VOICE, "piper", "piper.exe")):
+    raise SystemExit("Studio voice missing: run  python tools/fetch_voice.py  first")
+for folder, _dirs, files in os.walk(VOICE):
+    rel = os.path.relpath(folder, ROOT)
+    datas += [(os.path.join(folder, name), rel) for name in files if not name.endswith(".part")]
+
 a = Analysis(
     [os.path.join(ROOT, "entry.py")],
     pathex=[ROOT],
     datas=datas,
-    hiddenimports=["app", "lol_coach", "overlay", "web_dash", "settings", "updates", "winplat", "shop", "patterns"],
+    hiddenimports=["app", "lol_coach", "overlay", "web_dash", "settings", "updates", "winplat", "shop", "patterns", "voice"],
     excludes=["pydoc_data", "lib2to3", "test", "idlelib"],
     noarchive=False,
 )

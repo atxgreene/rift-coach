@@ -24,3 +24,4 @@ cache/
 packaging/version_info.txt
 shots/
 *.spec.bak
+voice/

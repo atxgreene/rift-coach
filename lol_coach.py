@@ -202,11 +202,12 @@ class Speaker:
     """
 
     def __init__(self, voice=True, voice_name="", rate=1, volume=100):
-        self.mode = self._detect() if voice else None
         self.voice_name = voice_name or ""
         self.rate = max(-10, min(10, int(rate)))
         self.volume = max(0, min(100, int(volume)))
         self.proc = None
+        self.studio = None
+        self.mode = self._pick_mode() if voice else None
         self.clock = lambda: 0
         self._log_fp = None
         self._cv = threading.Condition()
@@ -232,11 +233,52 @@ class Speaker:
         except Exception:
             return []
 
+    def _pick_mode(self):
+        """Studio (offline neural) voice when installed, else the system voice."""
+        try:
+            import voice as studio_voice
+            voice_id = studio_voice.resolve(self.voice_name)
+            if voice_id and studio_voice.Player().ok:
+                self.studio = studio_voice.Studio(voice_id, rate=self.rate, volume=self.volume)
+                threading.Thread(target=self._warm, daemon=True).start()
+                return "studio"
+        except Exception as exc:
+            print("Studio voice unavailable (%s); using the system voice." % type(exc).__name__, flush=True)
+            self.studio = None
+        return self._detect()
+
+    def _warm(self):
+        try:
+            self.studio.warm()
+        except Exception:
+            pass
+
+    @property
+    def engine(self):
+        if self.mode == "studio" and self.studio is not None:
+            import voice as studio_voice
+            return "Studio voice (%s)" % studio_voice.label(self.studio.voice_id)
+        return {"win": "Windows voice", "mac": "macOS voice", "espeak": "eSpeak"}.get(self.mode, "text only")
+
+    def _fall_back(self):
+        """Studio voice broke mid-game: keep talking with the system voice."""
+        studio, self.studio = self.studio, None
+        if studio is not None:
+            studio.close()
+        self.mode = self._detect()
+        print("Studio voice stopped; switched to %s." % self.engine, flush=True)
+
     def close(self):
         self.mode = None
         with self._cv:
             self._pending = []
             self._cv.notify_all()
+        if self.studio is not None:
+            try:
+                self.studio.close()
+            except Exception:
+                pass
+            self.studio = None
         if self.proc is not None:
             try:
                 self.proc.stdin.close()
@@ -348,18 +390,31 @@ class Speaker:
             pass
 
     def _run(self):
-        failures = 0
+        failures = studio_failures = 0
         while True:
             text = self.next_line()
             if text is None:
                 return  # speaker closed
             try:
+                if self.mode == "studio":
+                    try:
+                        self.studio.speak(text)
+                        studio_failures = 0
+                    except Exception:
+                        if self.mode is None:
+                            return  # closed while speaking
+                        studio_failures += 1
+                        if studio_failures < 2:
+                            continue  # Piper restarts on the next line
+                        self._fall_back()
                 if self.mode == "win":
                     self._speak_win(text)
                 elif self.mode == "mac":
                     subprocess.run(["say", text])
                 elif self.mode == "espeak":
                     subprocess.run(["espeak", text], stderr=subprocess.DEVNULL)
+                elif self.mode is None:
+                    return
                 self.spoken += 1
                 failures = 0
             except Exception as exc:
@@ -1846,7 +1901,13 @@ def doctor_check():
     add("No required pip packages", True, "stdlib-only runtime")
 
     voice_mode = Speaker._detect()
-    add("Voice backend", bool(voice_mode), voice_mode or "not found; use --no-voice")
+    add("System voice", bool(voice_mode), voice_mode or "not found; use --no-voice")
+    try:
+        import voice as studio_voice
+        ok, detail = studio_voice.self_test()
+    except Exception as exc:
+        ok, detail = False, "%s: %s" % (type(exc).__name__, exc)
+    add("Studio voice", ok, detail if ok else detail + "; the system voice is used instead")
 
     try:
         import tkinter  # noqa: F401
