@@ -26,6 +26,10 @@ Then set League to **Borderless** (Settings > Video > Window Mode) and play. The
 
 > **"Windows protected your PC"?** The app is new and not code-signed yet, so SmartScreen asks once. Click **More info > Run anyway**. Every release lists SHA-256 checksums in `SHA256SUMS.txt`, and the one-line installer checks them for you.
 
+<p align="center">
+  <img src="assets/app-screenshot.png" alt="The Macro Goblin app and in-game overlay during a match" width="900">
+</p>
+
 ### The app
 
 - Starts the coach automatically and waits for your match. The status card shows the clock, your champion, the next objective and the last callout.
