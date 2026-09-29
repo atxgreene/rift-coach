@@ -23,6 +23,21 @@ def grab(path):
         print("screenshot failed:", exc)
 
 
+def seed_reports(folder):
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sys.path.insert(0, root)
+    sys.path.insert(0, os.path.join(root, "tools"))
+    import lol_coach
+    import replay_eval
+    dd = replay_eval.data_dragon()
+    real = os.path.join(root, "tests", "fixtures", "real")
+    for name in sorted(os.listdir(real)):
+        coach, _rec, _minutes = replay_eval.replay(os.path.join(real, name), dd)
+        path = lol_coach.write_match_report(coach, "game end", folder=folder)
+        time.sleep(1.1)  # distinct timestamps so the list has an order
+        print("seeded", os.path.basename(path))
+
+
 def run_app(exe, home, args, wait, shot):
     env = dict(os.environ, MACROGOBLIN_HOME=home, MACROGOBLIN_DEBUG_LAYOUT="1")
     proc = subprocess.Popen([exe, "--no-update-check"] + args, env=env)
@@ -57,6 +72,16 @@ def main():
     with open(os.path.join(live, "settings.json"), "w", encoding="utf-8") as handle:
         json.dump({"first_run_done": True, "voice": False}, handle)
     ok &= run_app(exe, live, ["--demo"], 45, os.path.join(out, "2-demo-live.png"))
+
+    # Launcher alone (overlay off) with realistic match notes from the anonymized fixture games.
+    notes = tempfile.mkdtemp(prefix="mg-notes-")
+    with open(os.path.join(notes, "settings.json"), "w", encoding="utf-8") as handle:
+        json.dump({"first_run_done": True, "voice": False, "overlay": False}, handle)
+    try:
+        seed_reports(os.path.join(notes, "reports"))
+    except Exception as exc:
+        print("could not seed match notes:", exc)
+    ok &= run_app(exe, notes, ["--demo"], 45, os.path.join(out, "4-launcher-demo.png"))
 
     if setup and os.path.exists(setup):
         proc = subprocess.Popen([setup, "/NOLAUNCH"])
