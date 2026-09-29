@@ -1297,11 +1297,11 @@ class Coach:
         if has_control and not low:
             return
         if low and not has_control:
-            line = "Vision score is low and you have no control ward. Buy one next back."
+            line = "Low vision and no control ward. Buy one next back."
         elif low:
-            line = "Vision score is low. Place your control ward and use your trinket."
+            line = "Low vision. Place your control ward and use your trinket."
         else:
-            line = "No control ward. Grab one next back, it is 75 gold."
+            line = "No control ward. Grab one next back."
         self.vision_said += 1
         self.speak(line, P_LOW, cat="vision",
                    why="Wards show who is coming. Most deaths come from the side you cannot see.")

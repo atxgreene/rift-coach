@@ -44,9 +44,9 @@ TRACK_OFF = "#263245"
 
 SPEEDS = [("Calm", 0), ("Normal", 1), ("Quick", 3)]
 STYLE_CHOICES = [("Beginner", "beginner"), ("Standard", "standard"), ("Pro", "pro")]
-STYLE_HELP = {"beginner": "Explains the why behind new calls.",
-              "standard": "Timers, deaths, items and macro reads.",
-              "pro": "Only calls that change a decision now."}
+STYLE_HELP = {"beginner": "Explains why, the first times.",
+              "standard": "The full set of calls.",
+              "pro": "Decision calls only."}
 GRADE_COLORS = {"A": "#5fd38d", "B": "#c8aa6e", "C": "#e0a05a", "D": "#e06a6a"}
 OBJ_NAMES = {"dragon": "Dragon", "grubs": "Void grubs", "herald": "Herald", "baron": "Baron"}
 ROLE_NAMES = {"TOP": "Top", "JUNGLE": "Jungle", "MIDDLE": "Mid", "BOTTOM": "Bot", "UTILITY": "Support"}
@@ -464,7 +464,7 @@ class LauncherApp:
         self.mute_button.pack(side="right", anchor="n")
         self.mute_button.bind("<Button-1>", self.pick_mutes)
         self.paint_mutes()
-        self.setting_row(box, "hotkeys", "Quick keys", "Ctrl+Shift+R repeats the last call. Ctrl+Shift+N says what's next.")
+        self.setting_row(box, "hotkeys", "Quick keys", "In game: Ctrl+Shift+R repeat, Ctrl+Shift+N next.")
         self.setting_row(box, "overlay", "On-screen overlay", "Ctrl+Shift+O hides it.  Ctrl+Shift+M moves it.")
         self.setting_row(box, "capture", "Record my matches", "Stays on this PC. Powers your match notes.")
         self.setting_row(box, "web", "Second-screen dashboard", "Live timers in your browser.",
@@ -535,7 +535,7 @@ class LauncherApp:
     def paint_mutes(self):
         muted = [k for k in self.settings.get("muted", []) if k in lol_coach.CATEGORIES]
         if not muted:
-            text = "All kinds on. Muted ones still show on the overlay."
+            text = "All on. Muted ones stay on the overlay."
         elif len(muted) == 1:
             text = "%s muted." % lol_coach.CATEGORIES[muted[0]]
         else:

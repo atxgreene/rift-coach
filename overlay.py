@@ -623,6 +623,12 @@ def run(bus, stop, edit=False, master=None):
             text = visible_calls[-(idx + 1)] if idx < len(visible_calls) else ""
             lbl.configure(text=text)
 
+        if ticks["n"] % 5 == 0:
+            # A long callout can wrap to two lines; grow the card instead of cutting it off.
+            need = shell.winfo_reqheight()
+            if need > root.winfo_height() + 2:
+                root.geometry("%dx%d" % (root.winfo_width(), need))
+
         if ticks["n"] % 20 == 0 and not hidden["value"]:
             root.attributes("-topmost", True)
             apply_style()

@@ -13,7 +13,7 @@
 - **Your trends** in the app: your record over the last 20 games, win streaks, best champions, average grade in each area, and a tip for your weakest one.
 - **Quick keys.** `Ctrl+Shift+R` repeats the last callout; `Ctrl+Shift+N` says the next objective and what to buy next. These use the same Windows hotkey call as the overlay (no keyboard hook).
 - **New in-game calls:**
-  - Back timing: "Dragon in 90. You have 1,400 gold. Good time to back and shop."
+  - Back timing: "Dragon in 90. You have 1400 gold. Good time to back and shop."
   - Control ward and vision score reminders, three a game at most.
   - A threat read at the start: "They have 2 assassins, Zed and Kha'Zix. Ward your flanks and stay near your team."
 - **Command line:** `--style`, `--mute KIND`, `--voice-name` and `--no-hotkeys`.
