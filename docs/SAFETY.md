@@ -13,7 +13,11 @@ Macro Goblin is designed as a read-only, local-first companion.
    - URL: `https://ddragon.leagueoflegends.com`
    - Used for static item/champion metadata such as item names, prices, tags, and champion info.
 
-3. **Optional Anthropic API**
+3. **League's own settings file (read-only)**
+   - `Config\PersistedSettings.json` / `game.cfg` in the League install folder.
+   - Only the minimap size and side are read, so the compact HUD strip can sit just above the minimap. The file is never written.
+
+4. **Optional Anthropic API**
    - Used only when `--claude` is passed and `ANTHROPIC_API_KEY` is set.
    - Not required for normal operation.
 
@@ -33,7 +37,7 @@ Macro Goblin does not:
 
 The overlay is a separate topmost Windows/Tkinter window. It uses Windows window styles for click-through behavior. League should run in **Borderless** mode; exclusive fullscreen will usually cover the overlay.
 
-The hide/show hotkey uses Windows `RegisterHotKey`, not a low-level keyboard hook.
+The overlay hotkeys (Ctrl+Shift+O cycles compact strip / full card / off, Ctrl+Shift+M moves it) and the coach quick keys (Ctrl+Shift+R, Ctrl+Shift+N, held only during a match) use Windows `RegisterHotKey`, not a low-level keyboard hook.
 
 ## Web dashboard behavior
 

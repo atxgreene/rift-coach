@@ -117,6 +117,7 @@ CONFIG = {
     "web_port": 8765,
     "overlay": {
         "hotkey": "ctrl+shift+o",
+        "default_mode": "compact",  # compact HUD strip; Ctrl+Shift+O cycles compact / full card / hidden
         "callout_fade_seconds": 12,
         "layouts": {
             # x/y None = auto: top-right of the primary monitor. Your dragged position

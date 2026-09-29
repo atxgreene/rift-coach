@@ -14,6 +14,7 @@ import threading
 import time
 from ctypes import wintypes
 
+import hud
 import lol_coach
 
 ROOT = lol_coach.ROOT
@@ -117,6 +118,52 @@ def load_layout():
             pass
     base["key"] = key
     return base
+
+
+MODES = ("compact", "full", "hidden")
+
+
+def _read_layout_file():
+    path = layout_path()
+    if os.path.exists(path):
+        try:
+            with open(path, encoding="utf-8") as handle:
+                data = json.load(handle)
+            return data if isinstance(data, dict) else {}
+        except (OSError, ValueError):
+            return {}
+    return {}
+
+
+def _write_layout_file(data):
+    path = layout_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as handle:
+        json.dump(data, handle, indent=2)
+    os.replace(tmp, path)
+
+
+def load_mode():
+    mode = _read_layout_file().get("mode")
+    return mode if mode in MODES else CONFIG["overlay"].get("default_mode", "compact")
+
+
+def save_mode(mode):
+    data = _read_layout_file()
+    data["mode"] = mode
+    _write_layout_file(data)
+
+
+def load_compact_spot(key):
+    spot = _read_layout_file().get("compact-" + key) or {}
+    return spot if isinstance(spot, dict) else {}
+
+
+def save_compact_spot(key, x, y):
+    data = _read_layout_file()
+    data["compact-" + key] = {"x": int(x), "y": int(y)}
+    _write_layout_file(data)
 
 
 def save_layout(key, x, y, width=None, scale=None):
@@ -378,9 +425,10 @@ def run(bus, stop, edit=False, master=None):
     panel = tk.Frame(shell, bg=BG, padx=10, pady=8)
     panel.pack(fill="both", expand=True)
 
-    # Default to a movable floating companion window. Ctrl+Shift+M locks it
-    # into click-through mode when placing it over the game.
-    move_mode = {"value": bool(edit) or not CONFIG["overlay"].get("start_locked", False)}
+    # Ctrl+Shift+O cycles: compact HUD strip -> full card -> hidden.
+    # The compact strip starts locked (click-through); the full card starts movable.
+    mode = {"value": load_mode()}
+    move_mode = {"value": bool(edit) or (mode["value"] == "full" and not CONFIG["overlay"].get("start_locked", False))}
     hidden = {"value": False}
     drag = {"x": 0, "y": 0}
     ticks = {"n": 0}
@@ -476,29 +524,62 @@ def run(bus, stop, edit=False, master=None):
             return 0
         root.update_idletasks()
         click = not move_mode["value"] and not hidden["value"]
+        if compact is not None and compact.visible:
+            apply_exstyle(top_hwnd(compact.root), click_through=click)
         return apply_exstyle(top_hwnd(root), click_through=click)
+
+    def save_spots():
+        if mode["value"] == "compact" and compact is not None:
+            spot = compact.spot()
+            save_compact_spot(layout["key"], spot["x"], spot["y"])
+        else:
+            save_layout(layout["key"], root.winfo_x(), root.winfo_y(), width=int(layout["w"]), scale=scale)
 
     def set_move_mode(value):
         move_mode["value"] = bool(value)
         mode_label.configure(text="● FLOAT" if move_mode["value"] else "● LOCKED", fg=SOON if move_mode["value"] else UP)
         hotkey_hint.configure(text="Drag anywhere • Ctrl+Shift+M lock" if move_mode["value"] else "Click-through • Ctrl+Shift+M float")
+        show_mode()
         apply_style()
         if not move_mode["value"]:
-            save_layout(layout["key"], root.winfo_x(), root.winfo_y(), width=int(layout["w"]), scale=scale)
+            save_spots()
 
     def toggle_move_mode():
         if hidden["value"]:
             return
         set_move_mode(not move_mode["value"])
 
-    def hide_show():
-        hidden["value"] = not hidden["value"]
-        if hidden["value"]:
-            root.withdraw()
+    def show_mode(state=None):
+        """Show the window for the current mode. The compact strip only appears in a match
+        (or while you are moving it), so nothing sits on your screen between games."""
+        hidden["value"] = mode["value"] == "hidden"
+        full_on = mode["value"] == "full"
+        if full_on:
+            if not root.winfo_viewable():
+                root.deiconify()
+                root.attributes("-topmost", True)
         else:
-            root.deiconify()
-            root.attributes("-topmost", True)
-            root.after(50, apply_style)
+            root.withdraw()
+        if compact is not None:
+            if state is None:
+                state = bus.snapshot()
+            want = mode["value"] == "compact" and (bool(state.get("in_game")) or move_mode["value"])
+            was = compact.visible
+            (compact.show if want else compact.hide)()
+            if want and not was:
+                root.after(50, apply_style)
+
+    def hide_show():
+        order = MODES
+        mode["value"] = order[(order.index(mode["value"]) + 1) % len(order)] if mode["value"] in order else order[0]
+        if mode["value"] == "compact" and move_mode["value"] and not edit:
+            set_move_mode(False)  # the strip goes back to click-through when you cycle to it
+        try:
+            save_mode(mode["value"])
+        except OSError:
+            pass
+        show_mode()
+        root.after(50, apply_style)
 
     def poll_hotkey():
         try:
@@ -530,6 +611,15 @@ def run(bus, stop, edit=False, master=None):
         state = bus.snapshot()
         in_game = bool(state.get("in_game"))
         ticks["n"] += 1
+        if compact is not None:
+            show_mode(state)
+            if compact.visible:
+                compact.draw(state, placeholder=move_mode["value"])
+            if mode["value"] != "full":
+                if ticks["n"] % 20 == 0 and compact.visible:
+                    compact.root.attributes("-topmost", True)
+                    apply_style()
+                return
 
         clock.configure(text=state.get("clock") or "READY", fg=TEXT if in_game else MUTED)
         if in_game:
@@ -656,6 +746,42 @@ def run(bus, stop, edit=False, master=None):
             bind_drag(child)
 
     bind_drag(shell)
+
+    compact_drag = {"x": 0, "y": 0}
+
+    def compact_start(event):
+        if move_mode["value"]:
+            compact_drag["x"] = event.x_root - compact.root.winfo_x()
+            compact_drag["y"] = event.y_root - compact.root.winfo_y()
+
+    def compact_move(event):
+        if move_mode["value"]:
+            x, y = event.x_root - compact_drag["x"], event.y_root - compact_drag["y"]
+            compact.root.geometry("+%d+%d" % (x, y))
+            compact.moved_to(x, y)
+
+    def compact_end(_event):
+        if move_mode["value"]:
+            spot = compact.spot()
+            save_compact_spot(layout["key"], spot["x"], spot["y"])
+
+    def bind_compact(widget):
+        widget.bind("<Button-1>", compact_start)
+        widget.bind("<B1-Motion>", compact_move)
+        widget.bind("<ButtonRelease-1>", compact_end)
+        for child in widget.winfo_children():
+            bind_compact(child)
+
+    compact = None
+    try:
+        compact = hud.CompactHud(root, layout["key"], saved=load_compact_spot(layout["key"]))
+        bind_compact(compact.shell)
+    except Exception as exc:  # the full card still works without the strip
+        print("Compact HUD unavailable (%s); using the full overlay card." % exc, flush=True)
+        if mode["value"] == "compact":
+            mode["value"] = "full"
+    if mode["value"] != "full":
+        root.withdraw()
 
     hotkey_events = queue.Queue()
     start_hotkeys(hotkey_events, stop)

@@ -465,7 +465,7 @@ class LauncherApp:
         self.mute_button.bind("<Button-1>", self.pick_mutes)
         self.paint_mutes()
         self.setting_row(box, "hotkeys", "Quick keys", "In game: Ctrl+Shift+R repeat, Ctrl+Shift+N next.")
-        self.setting_row(box, "overlay", "On-screen overlay", "Ctrl+Shift+O hides it.  Ctrl+Shift+M moves it.")
+        self.setting_row(box, "overlay", "In-game overlay", "Ctrl+Shift+O: strip / full card / off.  Ctrl+Shift+M moves it.")
         self.setting_row(box, "capture", "Record my matches", "Stays on this PC. Powers your match notes.")
         self.setting_row(box, "web", "Second-screen dashboard", "Live timers in your browser.",
                          extra=("Open", lambda: winplat.open_url("http://127.0.0.1:8765")))

@@ -29,7 +29,7 @@ a = Analysis(
     [os.path.join(ROOT, "entry.py")],
     pathex=[ROOT],
     datas=datas,
-    hiddenimports=["app", "lol_coach", "overlay", "web_dash", "settings", "updates", "winplat", "shop", "patterns", "voice"],
+    hiddenimports=["app", "lol_coach", "overlay", "web_dash", "settings", "updates", "winplat", "shop", "patterns", "voice", "hud"],
     excludes=["pydoc_data", "lib2to3", "test", "idlelib"],
     noarchive=False,
 )
