@@ -24,13 +24,17 @@ def grab(path):
 
 
 def run_app(exe, home, args, wait, shot):
-    env = dict(os.environ, MACROGOBLIN_HOME=home)
+    env = dict(os.environ, MACROGOBLIN_HOME=home, MACROGOBLIN_DEBUG_LAYOUT="1")
     proc = subprocess.Popen([exe, "--no-update-check"] + args, env=env)
     time.sleep(wait)
     grab(shot)
     alive = proc.poll() is None
     proc.kill()
     proc.wait(10)
+    for crash in sorted(os.listdir(os.path.join(home, "logs"))) if os.path.isdir(os.path.join(home, "logs")) else []:
+        if crash.startswith("crash-"):
+            with open(os.path.join(home, "logs", crash), encoding="utf-8", errors="replace") as handle:
+                print("--- %s ---\n%s" % (crash, handle.read()[-3000:]))
     log = os.path.join(home, "logs", "app.log")
     if os.path.exists(log):
         with open(log, encoding="utf-8", errors="replace") as handle:

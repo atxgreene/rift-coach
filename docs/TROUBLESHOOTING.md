@@ -80,3 +80,20 @@ setx ANTHROPIC_API_KEY your_key_here
 ```
 
 Never commit `.env` or API keys.
+
+## "Windows protected your PC"
+
+The app is new and not code-signed yet, so SmartScreen asks the first time. Click **More info**, then **Run anyway**. To check the download yourself, compare `Get-FileHash .\MacroGoblin-Setup.exe` with `SHA256SUMS.txt` on the release page.
+
+## Where are my files?
+
+Settings, match notes (`reports\`), recordings (`captures\`), logs and cached game data are in `%LOCALAPPDATA%\MacroGoblin`. The app's **Data folder** link opens it. Updating or uninstalling keeps it; delete the folder yourself to remove everything.
+
+## The app closed or something looks wrong
+
+- Crash details are saved to `%LOCALAPPDATA%\MacroGoblin\logs\crash-*.txt`, and the app's own log is `logs\app.log`. Attach them to a GitHub issue.
+- `MacroGoblinCLI.exe --doctor` (in the install folder) checks voice, overlay support, game data and the live API.
+
+## Uninstall
+
+Windows Settings > Apps > Installed apps > Macro Goblin > Uninstall. Your data folder stays unless you delete it.

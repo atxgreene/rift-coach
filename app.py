@@ -353,7 +353,7 @@ class LauncherApp:
         self.left = left = tk.Frame(columns, bg=BG)
         left.pack(side="left", fill="y", anchor="n")
         tk.Frame(columns, bg=BG, width=px(12)).pack(side="left")
-        right = tk.Frame(columns, bg=BG)
+        self.right = right = tk.Frame(columns, bg=BG)
         right.pack(side="left", fill="y", anchor="n")
 
         # Status
@@ -632,6 +632,12 @@ class LauncherApp:
             if time.time() - self.last_reports_scan > 4:
                 self.last_reports_scan = time.time()
                 self.refresh_reports()
+            if os.environ.get("MACROGOBLIN_DEBUG_LAYOUT") and getattr(self, "_debug_ticks", 0) < 12:
+                self._debug_ticks = getattr(self, "_debug_ticks", 0) + 1
+                print("layout: win %dx%d req %dx%d left %d right %d screen %d state %s scale %.2f" % (
+                    self.root.winfo_width(), self.root.winfo_height(), self.content.winfo_reqwidth(),
+                    self.content.winfo_reqheight(), self.left.winfo_reqwidth(), self.right.winfo_reqwidth(),
+                    self.root.winfo_screenwidth(), self.root.state(), self.scale), flush=True)
             want_h = min(self.content.winfo_reqheight(), self.root.winfo_screenheight() - self.px(80))
             want_w = self.content.winfo_reqwidth()
             if self.root.state() == "normal" and (abs(self.root.winfo_height() - want_h) > 2

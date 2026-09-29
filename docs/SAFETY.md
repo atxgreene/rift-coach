@@ -42,3 +42,12 @@ The dashboard binds only to `127.0.0.1`. The code refuses non-localhost dashboar
 ## Local files
 
 `captures/`, `logs/`, `reports/` and `cache/` are local files. They can contain summoner names and match details. They are ignored by git and should not be shared unless intentionally anonymized.
+
+## Installer and updates
+
+- The installer (`MacroGoblin-Setup.exe`) installs for your Windows account only, into `%LOCALAPPDATA%\Programs\Macro Goblin`. It needs no admin rights and does not touch the League client or any system folder.
+- It adds a Start menu shortcut, an optional desktop shortcut, an optional "start with Windows" entry (`HKCU\...\Run\MacroGoblin`), and an uninstaller in Apps & features.
+- The update check reads `https://api.github.com/repos/atxgreene/rift-coach/releases/latest`. Nothing is sent about you, your PC or your matches.
+- "Update now" downloads the new installer from GitHub Releases and checks its SHA-256 against the release's `SHA256SUMS.txt`. If they don't match, nothing is installed. The one-line PowerShell installer does the same check.
+- Releases are built from this repository by GitHub Actions (`.github/workflows/release.yml`) on a clean Windows runner, and are not built on anyone's personal PC.
+- The executables are not code-signed yet, so Windows SmartScreen may ask once.
