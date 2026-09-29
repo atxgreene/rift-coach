@@ -21,3 +21,6 @@ dist/
 # Logs
 *.log
 cache/
+packaging/version_info.txt
+shots/
+*.spec.bak

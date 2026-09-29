@@ -212,7 +212,7 @@ class CoachTests(unittest.TestCase):
 
     def test_source_has_no_process_hooks(self):
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        for name in ("lol_coach.py", "overlay.py", "web_dash.py", "run_coach.bat"):
+        for name in ("lol_coach.py", "overlay.py", "web_dash.py", "run_coach.bat", "app.py", "winplat.py", "updates.py", "entry.py"):
             text = open(os.path.join(root, name), encoding="utf-8").read()
             for banned in BANNED:
                 self.assertNotIn(banned, text, "%s contains %s" % (name, banned))

@@ -1,0 +1,113 @@
+name: release
+on:
+  push:
+    tags: ["v*"]
+    branches: ["release/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Version
+        id: v
+        run: |
+          $v = python -c "import lol_coach; print(lol_coach.__version__)"
+          "version=$v" >> $env:GITHUB_OUTPUT
+          if ($env:GITHUB_REF -like 'refs/tags/v*' -and "v$v" -ne $env:GITHUB_REF_NAME) {
+            throw "Tag $env:GITHUB_REF_NAME does not match lol_coach.__version__ ($v)"
+          }
+          Write-Output "Building Macro Goblin $v"
+
+      - name: Tests
+        run: python -m unittest discover -s tests -p "test_*.py"
+
+      - name: Build app (PyInstaller)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "pyinstaller==6.*" pillow
+          python packaging/make_version_info.py
+          pyinstaller packaging/macrogoblin.spec --noconfirm --clean
+          Get-ChildItem dist/MacroGoblin | Select-Object Name, Length | Format-Table | Out-String | Write-Output
+
+      - name: Smoke test the executables
+        run: |
+          $d = "dist/MacroGoblin"
+          $env:MACROGOBLIN_HOME = Join-Path $env:RUNNER_TEMP "mg-smoke"
+          $ver = & "$d/MacroGoblinCLI.exe" --version
+          Write-Output $ver
+          if ($ver -notmatch "${{ steps.v.outputs.version }}") { throw "wrong version: $ver" }
+          & "$d/MacroGoblinCLI.exe" --doctor
+          if ($LASTEXITCODE -ne 0) { throw "doctor reported a setup problem" }
+          $out = & "$d/MacroGoblinCLI.exe" --demo --speed 600 --no-voice | Out-String
+          if ($out -notmatch 'Replay complete') { Write-Output $out; throw "demo replay did not finish" }
+          if ($out -notmatch 'Game over') { Write-Output $out; throw "demo did not reach game over" }
+          Write-Output "CLI demo OK"
+
+      - name: Build installer (Inno Setup)
+        run: |
+          choco install innosetup -y --no-progress | Out-Null
+          $iscc = Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"
+          & $iscc "/DMyAppVersion=${{ steps.v.outputs.version }}" packaging/installer.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
+
+      - name: Install, run and uninstall (silent round trip)
+        run: |
+          $p = Start-Process dist/MacroGoblin-Setup.exe -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOLAUNCH' -PassThru -Wait
+          if ($p.ExitCode -ne 0) { throw "installer exit code $($p.ExitCode)" }
+          $app = Join-Path $env:LOCALAPPDATA "Programs\Macro Goblin"
+          if (-not (Test-Path "$app\MacroGoblin.exe")) { throw "MacroGoblin.exe not installed" }
+          if (-not (Test-Path "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Macro Goblin.lnk")) { throw "Start menu shortcut missing" }
+          & "$app\MacroGoblinCLI.exe" --version
+          Start-Process "$app\unins000.exe" -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART'
+          $deadline = (Get-Date).AddSeconds(90)
+          while ((Test-Path "$app\MacroGoblin.exe") -and (Get-Date) -lt $deadline) { Start-Sleep 2 }
+          if (Test-Path "$app\MacroGoblin.exe") { throw "uninstaller left the app behind" }
+          Write-Output "install/uninstall round trip OK"
+
+      - name: Screenshots (launcher, overlay, installer)
+        continue-on-error: true
+        run: python packaging/ci_screenshots.py dist/MacroGoblin shots dist/MacroGoblin-Setup.exe
+
+      - name: Portable zip and checksums
+        run: |
+          Compress-Archive -Path dist/MacroGoblin/* -DestinationPath dist/MacroGoblin-Portable.zip -CompressionLevel Optimal
+          $lines = foreach ($f in 'MacroGoblin-Setup.exe','MacroGoblin-Portable.zip') {
+            "{0}  {1}" -f (Get-FileHash -Algorithm SHA256 "dist/$f").Hash.ToLower(), $f
+          }
+          $lines | Set-Content -Encoding ascii dist/SHA256SUMS.txt
+          Get-Content dist/SHA256SUMS.txt
+          Get-ChildItem dist -File | Select-Object Name, @{n='MB';e={[math]::Round($_.Length/1MB,1)}} | Format-Table | Out-String | Write-Output
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macrogoblin-${{ steps.v.outputs.version }}
+          path: |
+            dist/MacroGoblin-Setup.exe
+            dist/MacroGoblin-Portable.zip
+            dist/SHA256SUMS.txt
+            shots/*.png
+          if-no-files-found: warn
+
+      - name: Publish GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python packaging/release_notes.py | Set-Content -Encoding utf8 release-notes.md
+          gh release create "$env:GITHUB_REF_NAME" dist/MacroGoblin-Setup.exe dist/MacroGoblin-Portable.zip dist/SHA256SUMS.txt `
+            --title "Macro Goblin ${{ steps.v.outputs.version }}" --notes-file release-notes.md --latest

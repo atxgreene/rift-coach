@@ -41,6 +41,8 @@ HOTKEY_MOVE_ID = 0x4D10
 # Back-compat for the smoke test.
 HOTKEY_ID = HOTKEY_HIDE_ID
 
+ROLE_NAMES = {"TOP": "Top", "JUNGLE": "Jungle", "MIDDLE": "Mid", "BOTTOM": "Bot", "UTILITY": "Support"}
+
 # Macro Goblin HUD palette: dark map glass, thin gold/teal linework, restrained status colors.
 TRANSPARENT = "magenta"
 BG = "#05080d"
@@ -70,10 +72,12 @@ def screen_key():
     return "1440p" if height >= 1400 else "1080p"
 
 
-def screen_bounds():
+def screen_bounds(root=None):
     """(primary_w, primary_h, virtual_x, virtual_y, virtual_w, virtual_h). Virtual = all monitors."""
     if not user32:
-        return 1920, 1080, 0, 0, 1920, 1080
+        w = root.winfo_screenwidth() if root is not None else 1920
+        h = root.winfo_screenheight() if root is not None else 1080
+        return w, h, 0, 0, w, h
     metric = user32.GetSystemMetrics
     return (metric(SM_CXSCREEN), metric(SM_CYSCREEN), metric(SM_XVIRTUALSCREEN),
             metric(SM_YVIRTUALSCREEN), metric(SM_CXVIRTUALSCREEN), metric(SM_CYVIRTUALSCREEN))
@@ -96,7 +100,7 @@ def place(layout, width, height, bounds=None):
 
 
 def layout_path():
-    return os.path.join(ROOT, "overlay_layout.json")
+    return lol_coach.data_path("overlay_layout.json")
 
 
 def load_layout():
@@ -254,7 +258,9 @@ def split_shop(lines):
         if not line:
             continue
         if line.startswith("BUILD"):
-            alert = line.replace("BUILD", "PLAN", 1).strip()
+            reason = line[len("BUILD"):].strip()
+            if reason and reason != "adapting":
+                alert = "Build " + reason
         elif line.startswith(("BUY", "THEN")):
             buy.append(line)
         elif line.startswith(("HAVE", "LATER")):
@@ -287,7 +293,13 @@ def pack_section(parent, title, scale, tk, tkfont):
     return body
 
 
-def run(bus, stop, edit=False):
+def run(bus, stop, edit=False, master=None):
+    """Show the overlay card.
+
+    Standalone (CLI): owns the Tk main loop until `stop` is set.
+    With `master` (the launcher window): builds a Toplevel and returns it right away;
+    setting `stop` closes just the overlay.
+    """
     import tkinter as tk
     from tkinter import font as tkfont
 
@@ -297,11 +309,11 @@ def run(bus, stop, edit=False):
     height = int(548 * scale)
     fade = CONFIG["overlay"].get("callout_fade_seconds", 12)
 
-    root = tk.Tk()
+    root = tk.Toplevel(master) if master is not None else tk.Tk()
     root.title("Macro Goblin")
     root.overrideredirect(True)
     root.attributes("-topmost", True)
-    pos_x, pos_y = place(layout, width, height)
+    pos_x, pos_y = place(layout, width, height, screen_bounds(root))
     root.geometry("%dx%d+%d+%d" % (width, height, pos_x, pos_y))
     root.configure(bg=TRANSPARENT)
     if not edit:
@@ -447,7 +459,8 @@ def run(bus, stop, edit=False):
         lbl.pack(fill="x")
         callout_labels.append(lbl)
 
-    footer = tk.Label(panel, text="drag anywhere • Ctrl+Shift+M lock/click-through", bg=BG, fg=MUTED, font=tiny_font, anchor="center")
+    footer = tk.Label(panel, text="Ctrl+Shift+M lock / move   \u00b7   Ctrl+Shift+O hide", bg=BG, fg=MUTED,
+                      font=tiny_font, anchor="center")
     footer.pack(fill="x", side="bottom")
 
     def apply_style():
@@ -517,7 +530,8 @@ def run(bus, stop, edit=False):
             kda = state.get("kda") or ""
             level = state.get("level")
             level_bit = "LVL %s" % level if level else ""
-            who.configure(text=" • ".join(x for x in (champ, pos, kda, level_bit) if x), fg=TEXT)
+            pos = ROLE_NAMES.get(pos, pos.title())
+            who.configure(text="  \u00b7  ".join(x for x in (champ, pos, kda, level_bit) if x), fg=TEXT)
         else:
             who.configure(text=state.get("hint") or "Queue up. Borderless.", fg=MUTED)
 
@@ -640,6 +654,9 @@ def run(bus, stop, edit=False):
     root.after(80, apply_style)
     root.after(100, refresh)
     root.after(50, poll_hotkey)
+    root._image_refs = image_refs  # Tk images vanish when their last Python reference goes away
+    if master is not None:
+        return root
     try:
         root.mainloop()
     finally:

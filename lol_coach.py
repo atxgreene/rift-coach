@@ -37,12 +37,35 @@ import urllib.request
 import shop
 import patterns
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 LIVE_URL = "https://127.0.0.1:2999/liveclientdata/allgamedata"
 DDRAGON = "https://ddragon.leagueoflegends.com"
-ROOT = os.path.dirname(os.path.abspath(__file__))
+# ROOT: read-only resources (assets, demo game). Inside the installed .exe this is the
+# unpacked bundle. DATA: everything the app writes (settings, reports, captures, cache).
+ROOT = getattr(sys, "_MEIPASS", None) or os.path.dirname(os.path.abspath(__file__))
+FROZEN = bool(getattr(sys, "frozen", False))
+
+
+def _data_dir():
+    override = os.environ.get("MACROGOBLIN_HOME")
+    if override:
+        return override
+    if not FROZEN:
+        return os.path.dirname(os.path.abspath(__file__))  # running from source: keep files in the repo
+    base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+    return os.path.join(base, "MacroGoblin")
+
+
+DATA = _data_dir()
 DEMO_GAME = os.path.join(ROOT, "tests", "fixtures", "real", "kaisa-bot-win.jsonl.gz")
+BUNDLED_DDRAGON = os.path.join(ROOT, "tests", "fixtures", "ddragon.json.gz")
+REPO_URL = "https://github.com/atxgreene/rift-coach"
+RELEASES_API = "https://api.github.com/repos/atxgreene/rift-coach/releases/latest"
+
+
+def data_path(*parts):
+    return os.path.join(DATA, *parts)
 
 # Objective clock checked 2026-09-26.
 # Patch 26.1 moved Baron 25:00 -> 20:00 and said other epic spawn times were unchanged:
@@ -178,8 +201,11 @@ class Speaker:
     each finished sentence, so the queue knows when the voice is actually free.
     """
 
-    def __init__(self, voice=True):
+    def __init__(self, voice=True, voice_name="", rate=1, volume=100):
         self.mode = self._detect() if voice else None
+        self.voice_name = voice_name or ""
+        self.rate = max(-10, min(10, int(rate)))
+        self.volume = max(0, min(100, int(volume)))
         self.proc = None
         self.clock = lambda: 0
         self._log_fp = None
@@ -190,6 +216,40 @@ class Speaker:
         self.dropped = 0
         if self.mode:
             threading.Thread(target=self._run, daemon=True).start()
+
+    @staticmethod
+    def list_voices():
+        """Installed Windows voices (names), or [] elsewhere. Takes about a second; call off the UI thread."""
+        if not sys.platform.startswith("win"):
+            return []
+        script = ("Add-Type -AssemblyName System.Speech;"
+                  "(New-Object System.Speech.Synthesis.SpeechSynthesizer).GetInstalledVoices()"
+                  " | ForEach-Object { $_.VoiceInfo.Name }")
+        try:
+            out = subprocess.run(["powershell", "-NoProfile", "-Command", script], capture_output=True,
+                                 text=True, timeout=15, creationflags=0x08000000)
+            return [line.strip() for line in out.stdout.splitlines() if line.strip()]
+        except Exception:
+            return []
+
+    def close(self):
+        self.mode = None
+        with self._cv:
+            self._pending = []
+            self._cv.notify_all()
+        if self.proc is not None:
+            try:
+                self.proc.stdin.close()
+                self.proc.kill()
+            except Exception:
+                pass
+            self.proc = None
+        if self._log_fp:
+            try:
+                self._log_fp.close()
+            except Exception:
+                pass
+            self._log_fp = None
 
     @staticmethod
     def _detect():
@@ -230,18 +290,19 @@ class Speaker:
                     best = max(fresh, key=lambda row: (row[0], -row[1]))
                     self._pending.remove(best)
                     return best[3]
-                if not block:
+                if not block or self.mode is None:
                     return None
                 self._cv.wait(timeout=1.0)
 
     def _win_proc(self):
         if self.proc is None or self.proc.poll() is not None:
+            wanted = (self.voice_name or "Microsoft Zira Desktop").replace("'", "''")
             script = (
                 "Add-Type -AssemblyName System.Speech;"
                 "[Console]::InputEncoding = [Text.Encoding]::UTF8;"
                 "$s=New-Object System.Speech.Synthesis.SpeechSynthesizer;"
-                "$s.Rate=1; $s.Volume=100;"
-                "try { $s.SelectVoice('Microsoft Zira Desktop') } catch {};"
+                "$s.Rate=%d; $s.Volume=%d;" % (self.rate, self.volume) +
+                "try { $s.SelectVoice('%s') } catch {};" % wanted +
                 "while(($l=[Console]::In.ReadLine()) -ne $null){"
                 "try { $s.Speak($l) } catch {};"
                 "[Console]::Out.WriteLine('done'); [Console]::Out.Flush() }"
@@ -290,6 +351,8 @@ class Speaker:
         failures = 0
         while True:
             text = self.next_line()
+            if text is None:
+                return  # speaker closed
             try:
                 if self.mode == "win":
                     self._speak_win(text)
@@ -333,7 +396,7 @@ class DataDragon:
         self.catalog = {"_by_name": {}}
         self.patch = None
         self.ok = False
-        cache_dir = cache_dir or os.path.join(ROOT, "cache")
+        cache_dir = cache_dir or data_path("cache")
         if offline_file:
             self._load(self._read(offline_file))
             return
@@ -354,6 +417,8 @@ class DataDragon:
                     pass
         except Exception:
             cached = sorted(glob.glob(os.path.join(cache_dir, "ddragon-*.json.gz")), key=os.path.getmtime)
+            if not cached and os.path.exists(BUNDLED_DDRAGON):
+                cached = [BUNDLED_DDRAGON]  # shipped snapshot: first run works offline
             if cached:
                 try:
                     compact = self._read(cached[-1])
@@ -1553,7 +1618,7 @@ def safe_name(text):
 
 def write_match_report(coach, reason, folder=None):
     """One markdown note per match. A restart mid-game overwrites the same note instead of splitting it."""
-    folder = folder or os.path.join(ROOT, "reports")
+    folder = folder or data_path("reports")
     os.makedirs(folder, exist_ok=True)
     champ = coach.me.get("championName") if coach.me else "unknown"
     pos = norm_pos(coach.me.get("position")) if coach.me else ""
@@ -1614,9 +1679,12 @@ def write_match_report(coach, reason, folder=None):
 
 
 def publish_wait(coach):
-    if not coach.bus:
-        return
-    coach.bus.publish({
+    if coach.bus:
+        publish_idle(coach.bus)
+
+
+def publish_idle(bus):
+    bus.publish({
         "in_game": False,
         "clock": "READY",
         "status": "Queue up",
@@ -1789,7 +1857,7 @@ def doctor_check():
         latest = versions[0] if versions else "unknown"
         add("Riot Data Dragon", True, "latest patch %s" % latest)
     except Exception as exc:
-        cached = glob.glob(os.path.join(ROOT, "cache", "ddragon-*.json.gz"))
+        cached = glob.glob(data_path("cache", "ddragon-*.json.gz")) or glob.glob(BUNDLED_DDRAGON)
         add("Riot Data Dragon", bool(cached), "offline; using cached game data" if cached else "%s: %s" % (type(exc).__name__, exc))
 
     try:
@@ -1834,77 +1902,149 @@ def build_arg_parser():
     return parser
 
 
+class SessionOptions:
+    """Everything one coach run needs. The launcher builds it from settings; the CLI from flags."""
+
+    def __init__(self, **kw):
+        self.demo = kw.get("demo", False)
+        self.synthetic = kw.get("synthetic", False)
+        self.replay = kw.get("replay")
+        self.speed = float(kw.get("speed", 10))
+        self.voice = kw.get("voice", True)
+        self.voice_name = kw.get("voice_name", "")
+        self.voice_rate = kw.get("voice_rate", 1)
+        self.voice_volume = kw.get("voice_volume", 100)
+        self.capture = kw.get("capture", False)
+        self.log = kw.get("log", False)
+        self.web = kw.get("web", False)
+        self.me = kw.get("me") or None
+        self.claude = kw.get("claude", False)
+        self.cs_target = kw.get("cs_target")
+
+
+class CoachSession:
+    """One running coach: voice, Data Dragon, poll loop and optional dashboard, all on background threads.
+
+    The overlay is not part of the session; it reads session.bus from the UI thread.
+    """
+
+    def __init__(self, options, bus=None):
+        self.options = options
+        self.stop_event = threading.Event()
+        self.bus = bus or UiBus()
+        self.speaker = None
+        self.coach = None
+        self.worker = None
+        self.error = None
+        self.client_kind = "live"
+
+    @property
+    def running(self):
+        return bool(self.worker and self.worker.is_alive())
+
+    def _client(self):
+        opts = self.options
+        if opts.replay:
+            self.client_kind = "replay"
+            return ReplayClient(opts.replay, opts.speed)
+        if opts.demo and os.path.exists(DEMO_GAME) and not opts.synthetic:
+            self.client_kind = "demo"
+            print("Demo: replaying a real anonymized match at %gx speed." % opts.speed, flush=True)
+            return ReplayClient(DEMO_GAME, opts.speed)
+        if opts.demo:
+            self.client_kind = "demo"
+            return MockGame(opts.speed)
+        self.client_kind = "live"
+        return LiveClient()
+
+    def start(self):
+        opts = self.options
+        if opts.cs_target:
+            CONFIG["cs_target_per_min"] = float(opts.cs_target)
+        self.speaker = Speaker(voice=opts.voice, voice_name=opts.voice_name,
+                               rate=opts.voice_rate, volume=opts.voice_volume)
+        if opts.log:
+            log_path = data_path("logs", time.strftime("coach-%Y%m%d-%H%M%S.log"))
+            try:
+                self.speaker.enable_log(log_path)
+                print("Logging callouts to %s" % log_path, flush=True)
+            except OSError as exc:
+                print("Callout log disabled (%s)." % exc, flush=True)
+        claude = None
+        if opts.claude:
+            key = os.environ.get("ANTHROPIC_API_KEY")
+            if key:
+                claude = ClaudeCoach(key, CONFIG["claude_model"], self.speaker)
+                print("Claude mode on (%s)." % CONFIG["claude_model"], flush=True)
+            else:
+                print("ANTHROPIC_API_KEY not set - running without Claude mode.", flush=True)
+        self.coach = Coach(self.speaker, None, claude, bus=self.bus, me_name=opts.me)
+        self.speaker.clock = lambda: self.coach.t
+        client = self._client()
+        capture = Capture(data_path("captures")) if (opts.capture and self.client_kind == "live") else None
+        publish_wait(self.coach)
+
+        def work():
+            try:
+                self.coach.dd = DataDragon()  # can take a few seconds on a new patch; off the UI thread
+                run_loop(opts, self.speaker, self.coach, client, capture, self.stop_event)
+            except Exception as exc:  # never die silently
+                self.error = "%s: %s" % (type(exc).__name__, exc)
+                print("Coach stopped: %s" % self.error, flush=True)
+            finally:
+                self.stop_event.set()
+
+        self.worker = threading.Thread(target=work, name="coach-poll", daemon=True)
+        self.worker.start()
+        if opts.web:
+            import web_dash
+            threading.Thread(target=web_dash.serve, args=(self.bus, self.stop_event),
+                             name="coach-web", daemon=True).start()
+        return self
+
+    def stop(self, timeout=5.0):
+        self.stop_event.set()
+        if self.worker:
+            self.worker.join(timeout)
+        if self.speaker:
+            self.speaker.close()
+
+
 def main(argv=None):
     args = build_arg_parser().parse_args(argv)
     if args.doctor:
         return doctor_check()
     if args.demo and args.replay:
         raise SystemExit("Use either --demo or --replay, not both.")
-    stop = threading.Event()
-    speaker = Speaker(voice=not args.no_voice)
-    if args.log:
-        log_path = os.path.join(ROOT, "logs", time.strftime("coach-%Y%m%d-%H%M%S.log"))
-        speaker.enable_log(log_path)
-        print("Logging callouts to %s" % log_path, flush=True)
-    dd = DataDragon()
-    claude = None
-    if args.claude:
-        key = os.environ.get("ANTHROPIC_API_KEY")
-        if key:
-            claude = ClaudeCoach(key, CONFIG["claude_model"], speaker)
-            print("Claude mode on (%s)." % CONFIG["claude_model"])
-        else:
-            print("ANTHROPIC_API_KEY not set - running without Claude mode.")
-    bus = UiBus()
-    coach = Coach(speaker, dd, claude, bus=bus, me_name=args.me)
-    speaker.clock = lambda: coach.t
-    if args.replay:
-        client = ReplayClient(args.replay, args.speed)
-    elif args.demo and os.path.exists(DEMO_GAME) and not args.synthetic:
-        # A real, anonymized ranked game (Kai'Sa bot lane) played back at --speed.
-        client = ReplayClient(DEMO_GAME, args.speed)
-        print("Demo: replaying a real anonymized match at %gx speed." % args.speed, flush=True)
-    elif args.demo:
-        client = MockGame(args.speed)
-    else:
-        client = LiveClient()
-    capture = Capture(os.path.join(ROOT, "captures")) if args.capture else None
-
-    needs_ui = args.overlay or args.overlay_edit or args.web
-    if not needs_ui:
-        run_loop(args, speaker, coach, client, capture, stop)
-        return
-
-    worker = threading.Thread(
-        target=run_loop, args=(args, speaker, coach, client, capture, stop), daemon=True
+    options = SessionOptions(
+        demo=args.demo, synthetic=args.synthetic, replay=args.replay, speed=args.speed,
+        voice=not args.no_voice, capture=args.capture, log=args.log, web=args.web,
+        me=args.me, claude=args.claude,
     )
-    worker.start()
+    session = CoachSession(options).start()
     try:
-        if args.web:
-            import web_dash
-            threading.Thread(target=web_dash.serve, args=(bus, stop), daemon=True).start()
         if args.overlay or args.overlay_edit:
             import overlay
             # Tk swallows KeyboardInterrupt inside its callbacks. Turn Ctrl+C into a clean stop instead.
             try:
-                signal.signal(signal.SIGINT, lambda *_args: stop.set())
+                signal.signal(signal.SIGINT, lambda *_args: session.stop_event.set())
             except (ValueError, OSError):
                 pass
             try:
-                overlay.run(bus, stop, edit=args.overlay_edit)
+                overlay.run(session.bus, session.stop_event, edit=args.overlay_edit)
             except Exception as exc:
                 print("Overlay failed (%s). Voice coach still running. Ctrl+C to quit." % exc, flush=True)
-                while not stop.is_set():
+                while not session.stop_event.is_set():
                     time.sleep(0.5)
         else:
-            while not stop.is_set():
+            while session.running:
                 time.sleep(0.2)
     except KeyboardInterrupt:
         print("\nCoach signing off.", flush=True)
     finally:
         # Let the poll thread write the match note and close the capture before exit.
-        stop.set()
-        worker.join(5)
+        session.stop()
+    return 1 if session.error else 0
 
 
 if __name__ == "__main__":
