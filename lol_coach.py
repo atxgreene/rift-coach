@@ -18,11 +18,14 @@ Usage
 
 import argparse
 import glob
+import gzip
+import hashlib
 import json
 import os
 import queue
 import random
 import shutil
+import signal
 import ssl
 import subprocess
 import sys
@@ -34,9 +37,12 @@ import urllib.request
 import shop
 import patterns
 
+__version__ = "1.0.0"
+
 LIVE_URL = "https://127.0.0.1:2999/liveclientdata/allgamedata"
 DDRAGON = "https://ddragon.leagueoflegends.com"
 ROOT = os.path.dirname(os.path.abspath(__file__))
+DEMO_GAME = os.path.join(ROOT, "tests", "fixtures", "real", "kaisa-bot-win.jsonl.gz")
 
 # Objective clock checked 2026-09-26.
 # Patch 26.1 moved Baron 25:00 -> 20:00 and said other epic spawn times were unchanged:
@@ -50,6 +56,9 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 # Confirm grubs against the first --capture. Atakhan was removed in 26.1; no handler until a capture shows an event name.
 CONFIG = {
     "poll_seconds": 1.0,
+    # A single failed poll is normal (loading, heavy fights). Only treat the game as
+    # closed after this many seconds of consecutive failures.
+    "disconnect_grace": 15,
     "dragon_first_spawn": 300,
     "dragon_respawn": 300,
     "elder_respawn": 360,
@@ -63,10 +72,17 @@ CONFIG = {
     "cs_target_per_min": 8.0,
     "cs_check_every": 180,
     "gold_bank_threshold": 1300,
-    "gold_bank_cooldown": 120,
+    "gold_bank_cooldown": 180,
     "gold_diff_every": 300,
-    "gold_swing_alert": 1500,
     "legendary_min_gold": 2500,
+    "soul_dragons": 4,
+    "grub_group_seconds": 25,
+    # Voice pacing. Low-priority lines (CS, gold, items) are shown on the overlay
+    # every time but spoken at most once per low_voice_gap seconds.
+    "low_voice_gap": 20,
+    "pattern_cooldown": 300,
+    "lead_peak": 3000,
+    "lead_drop": 2500,
     "claude_model": "claude-haiku-4-5-20251001",
     "claude_every": 300,
     "web_host": "127.0.0.1",
@@ -75,8 +91,10 @@ CONFIG = {
         "hotkey": "ctrl+shift+o",
         "callout_fade_seconds": 12,
         "layouts": {
-            "1080p": {"x": 1936, "y": -95, "w": 300, "scale": 1.0, "opacity": 0.94},
-            "1440p": {"x": 20, "y": 180, "w": 300, "scale": 1.15, "opacity": 0.94},
+            # x/y None = auto: top-right of the primary monitor. Your dragged position
+            # is saved per machine in overlay_layout.json (not committed).
+            "1080p": {"x": None, "y": 140, "w": 300, "scale": 1.0, "opacity": 0.94},
+            "1440p": {"x": None, "y": 180, "w": 300, "scale": 1.15, "opacity": 0.94},
         },
     },
 }
@@ -146,14 +164,32 @@ class UiBus:
             return dict(self.state)
 
 
+# Voice priorities. 0 = overlay/log only, never spoken.
+P_QUIET, P_LOW, P_NORMAL, P_URGENT = 0, 1, 2, 3
+# Seconds a queued line stays worth saying. A late "Dragon in 30 seconds" is worse than silence.
+VOICE_TTL = {P_LOW: 20, P_NORMAL: 15, P_URGENT: 10}
+
+
 class Speaker:
+    """Prints every line; speaks the ones worth hearing, newest-important first.
+
+    Lines wait in a small priority queue. Anything older than its TTL is dropped
+    instead of spoken late. On Windows the hidden PowerShell voice acknowledges
+    each finished sentence, so the queue knows when the voice is actually free.
+    """
+
     def __init__(self, voice=True):
-        self.q = queue.Queue()
         self.mode = self._detect() if voice else None
         self.proc = None
         self.clock = lambda: 0
         self._log_fp = None
-        threading.Thread(target=self._run, daemon=True).start()
+        self._cv = threading.Condition()
+        self._pending = []
+        self._acks = queue.Queue()
+        self.spoken = 0
+        self.dropped = 0
+        if self.mode:
+            threading.Thread(target=self._run, daemon=True).start()
 
     @staticmethod
     def _detect():
@@ -169,14 +205,34 @@ class Speaker:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         self._log_fp = open(path, "a", encoding="utf-8")
 
-    def say(self, text):
-        line = "[%s] %s" % (fmt_time(self.clock()), text)
+    def say(self, text, priority=P_NORMAL, ttl=None):
+        mark = " " if priority > P_QUIET else "\u00b7"
+        line = "[%s]%s%s" % (fmt_time(self.clock()), mark, text)
         print(line, flush=True)
         if self._log_fp:
             self._log_fp.write(time.strftime("%H:%M:%S ") + line + "\n")
             self._log_fp.flush()
-        if self.mode:
-            self.q.put(text)
+        if self.mode and priority > P_QUIET:
+            with self._cv:
+                ttl = VOICE_TTL.get(priority, 15) if ttl is None else ttl
+                self._pending.append((priority, time.monotonic(), ttl, text))
+                self._cv.notify()
+
+    def next_line(self, block=True):
+        """Highest priority, then oldest, among lines that are still fresh."""
+        with self._cv:
+            while True:
+                now = time.monotonic()
+                fresh = [row for row in self._pending if now - row[1] <= row[2]]
+                self.dropped += len(self._pending) - len(fresh)
+                self._pending = fresh
+                if fresh:
+                    best = max(fresh, key=lambda row: (row[0], -row[1]))
+                    self._pending.remove(best)
+                    return best[3]
+                if not block:
+                    return None
+                self._cv.wait(timeout=1.0)
 
     def _win_proc(self):
         if self.proc is None or self.proc.poll() is not None:
@@ -184,13 +240,15 @@ class Speaker:
                 "Add-Type -AssemblyName System.Speech;"
                 "[Console]::InputEncoding = [Text.Encoding]::UTF8;"
                 "$s=New-Object System.Speech.Synthesis.SpeechSynthesizer;"
-                "$s.Rate=0; $s.Volume=100;"
-                "try { $s.SelectVoice('Microsoft Zira Desktop') } catch {}"
-                "while(($l=[Console]::In.ReadLine()) -ne $null){$s.Speak($l)}"
+                "$s.Rate=1; $s.Volume=100;"
+                "try { $s.SelectVoice('Microsoft Zira Desktop') } catch {};"
+                "while(($l=[Console]::In.ReadLine()) -ne $null){"
+                "try { $s.Speak($l) } catch {};"
+                "[Console]::Out.WriteLine('done'); [Console]::Out.Flush() }"
             )
             kwargs = dict(
                 stdin=subprocess.PIPE,
-                stdout=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
                 text=True,
                 encoding="utf-8",
@@ -198,88 +256,211 @@ class Speaker:
             if sys.platform.startswith("win"):
                 kwargs["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
             self.proc = subprocess.Popen(["powershell", "-NoProfile", "-Command", script], **kwargs)
+            self._acks = queue.Queue()
+            threading.Thread(target=self._read_acks, args=(self.proc, self._acks), daemon=True).start()
         return self.proc
 
-    def _run(self):
+    @staticmethod
+    def _read_acks(proc, acks):
+        try:
+            for _line in proc.stdout:
+                acks.put(True)
+        except Exception:
+            pass
+        acks.put(None)
+
+    def _speak_win(self, text):
+        proc = self._win_proc()
+        # A late ack from a slow first start must not satisfy the next wait,
+        # or every later line would be sent before the previous one finished.
         while True:
-            text = self.q.get()
+            try:
+                self._acks.get_nowait()
+            except queue.Empty:
+                break
+        proc.stdin.write(text.replace("\n", " ") + "\n")
+        proc.stdin.flush()
+        # Wait for the sentence to finish so stale lines can still be dropped.
+        try:
+            self._acks.get(timeout=3 + len(text) / 8.0)
+        except queue.Empty:
+            pass
+
+    def _run(self):
+        failures = 0
+        while True:
+            text = self.next_line()
             try:
                 if self.mode == "win":
-                    proc = self._win_proc()
-                    proc.stdin.write(text.replace("\n", " ") + "\n")
-                    proc.stdin.flush()
+                    self._speak_win(text)
                 elif self.mode == "mac":
                     subprocess.run(["say", text])
                 elif self.mode == "espeak":
                     subprocess.run(["espeak", text], stderr=subprocess.DEVNULL)
-            except Exception:
-                self.mode = None
+                self.spoken += 1
+                failures = 0
+            except Exception as exc:
+                failures += 1
+                if self.proc is not None:
+                    try:
+                        self.proc.kill()  # never leave two voices talking over each other
+                    except Exception:
+                        pass
+                self.proc = None  # restart the voice process on the next line
+                if failures >= 3:
+                    print("Voice stopped (%s). Callouts continue as text." % type(exc).__name__, flush=True)
+                    self.mode = None
+                    return
+
+
+def _plain(text):
+    out, skip = [], False
+    for char in text or "":
+        if char == "<":
+            skip = True
+        elif char == ">":
+            skip = False
+        elif not skip:
+            out.append(char)
+    return "".join(out)
 
 
 class DataDragon:
-    def __init__(self):
-        self.item_gold, self.item_tags, self.champ_info = {}, {}, {}
+    """Static item and champion data. Cached per patch so later starts are instant and offline-safe."""
+
+    def __init__(self, cache_dir=None, offline_file=None, quiet=False):
+        self.item_gold, self.item_tags, self.champ_info, self.champ_tags = {}, {}, {}, {}
         self.catalog = {"_by_name": {}}
         self.patch = None
+        self.ok = False
+        cache_dir = cache_dir or os.path.join(ROOT, "cache")
+        if offline_file:
+            self._load(self._read(offline_file))
+            return
+        compact = None
         try:
             ver = self._get("%s/api/versions.json" % DDRAGON)[0]
-            self.patch = ver
-            items = self._get("%s/cdn/%s/data/en_US/item.json" % (DDRAGON, ver))["data"]
-            for key, value in items.items():
+            path = os.path.join(cache_dir, "ddragon-%s.json.gz" % ver)
+            if os.path.exists(path):
+                compact = self._read(path)
+            else:
+                compact = self.fetch(ver)
                 try:
-                    iid = int(key)
-                except (TypeError, ValueError):
-                    continue
-                self.item_gold[iid] = value.get("gold", {}).get("total", 0)
-                self.item_tags[iid] = value.get("tags", [])
-                maps = value.get("maps") or {}
-                if maps and not maps.get("11", False):
-                    continue
-                if iid >= 20000:
-                    continue
-                name = value.get("name") or ""
-                self.catalog[iid] = {
-                    "name": name,
-                    "gold": value.get("gold", {}).get("total", 0) or 0,
-                    "tags": value.get("tags") or [],
-                    "desc": value.get("description") or "",
-                    "from": value.get("from") or [],
-                    "into": value.get("into") or [],
-                    "in_store": value.get("inStore", True),
-                }
-                if name:
-                    self.catalog["_by_name"][name.lower()] = iid
-            champs = self._get("%s/cdn/%s/data/en_US/champion.json" % (DDRAGON, ver))["data"]
-            for value in champs.values():
-                self.champ_info[value["id"].lower()] = value["info"]
-                self.champ_info[value["name"].lower()] = value["info"]
-            print("Loaded game data for patch %s." % ver)
+                    os.makedirs(cache_dir, exist_ok=True)
+                    with gzip.open(path + ".tmp", "wt", encoding="utf-8") as handle:
+                        json.dump(compact, handle)
+                    os.replace(path + ".tmp", path)
+                except OSError:
+                    pass
         except Exception:
-            print("Couldn't reach Data Dragon - using in-game item prices; comp read disabled.")
+            cached = sorted(glob.glob(os.path.join(cache_dir, "ddragon-*.json.gz")), key=os.path.getmtime)
+            if cached:
+                try:
+                    compact = self._read(cached[-1])
+                except Exception:
+                    compact = None
+        if compact:
+            self._load(compact)
+            if not quiet:
+                print("Loaded game data for patch %s." % self.patch)
+        elif not quiet:
+            print("Couldn't reach Data Dragon and no cache yet - item gold and comp read disabled.")
 
     @staticmethod
     def _get(url):
         with urllib.request.urlopen(url, timeout=6) as response:
             return json.load(response)
 
-    def gold(self, item):
-        return self.item_gold.get(item.get("itemID"), item.get("price", 0))
+    @staticmethod
+    def _read(path):
+        opener = gzip.open if path.endswith(".gz") else open
+        with opener(path, "rt", encoding="utf-8") as handle:
+            return json.load(handle)
 
-    def is_legendary(self, item):
-        if item.get("consumable"):
+    @classmethod
+    def fetch(cls, ver):
+        items = cls._get("%s/cdn/%s/data/en_US/item.json" % (DDRAGON, ver))["data"]
+        champs = cls._get("%s/cdn/%s/data/en_US/champion.json" % (DDRAGON, ver))["data"]
+        compact = {"patch": ver, "items": {}, "champs": {}}
+        for key, value in items.items():
+            maps = value.get("maps") or {}
+            compact["items"][key] = {
+                "name": value.get("name") or "",
+                "gold": (value.get("gold") or {}).get("total", 0) or 0,
+                "tags": value.get("tags") or [],
+                "from": value.get("from") or [],
+                "into": value.get("into") or [],
+                "in_store": value.get("inStore", True),
+                "sr": bool(maps.get("11", True)) if maps else True,
+                "desc": _plain(value.get("description") or "").lower()[:600],
+            }
+        for value in champs.values():
+            compact["champs"][value["id"]] = {"name": value["name"], "info": value["info"], "tags": value.get("tags") or []}
+        return compact
+
+    def _load(self, compact):
+        self.patch = compact.get("patch")
+        for key, value in (compact.get("items") or {}).items():
+            try:
+                iid = int(key)
+            except (TypeError, ValueError):
+                continue
+            self.item_gold[iid] = value.get("gold", 0) or 0
+            self.item_tags[iid] = value.get("tags") or []
+            if not value.get("sr", True) or iid >= 20000:
+                continue
+            name = value.get("name") or ""
+            self.catalog[iid] = {
+                "name": name,
+                "gold": value.get("gold", 0) or 0,
+                "tags": value.get("tags") or [],
+                "desc": value.get("desc") or "",
+                "from": value.get("from") or [],
+                "into": value.get("into") or [],
+                "in_store": value.get("in_store", True),
+            }
+            if name and name.lower() not in self.catalog["_by_name"]:
+                self.catalog["_by_name"][name.lower()] = iid
+        for key, value in (compact.get("champs") or {}).items():
+            for alias in (key.lower(), (value.get("name") or "").lower()):
+                if alias:
+                    self.champ_info[alias] = value.get("info") or {}
+                    self.champ_tags[alias] = value.get("tags") or []
+        self.ok = bool(self.item_gold)
+
+    def gold(self, item):
+        iid = item.get("itemID")
+        if iid in self.item_gold:
+            return self.item_gold[iid]
+        # The live client's "price" is the combine cost (Trinity Force = 133), not the item's value.
+        return 0
+
+    def is_boots(self, item):
+        if not isinstance(item, dict):
             return False
         tags = self.item_tags.get(item.get("itemID"), [])
-        name = item.get("displayName", "")
-        if "Boots" in tags or "Boots" in name or "Greaves" in name or "Treads" in name:
+        name = item.get("displayName") or ""
+        return "Boots" in tags or any(word in name for word in ("Boots", "Greaves", "Treads", "Steelcaps", "Shoes"))
+
+    def is_legendary(self, item):
+        if item.get("consumable") or self.is_boots(item):
             return False
         return self.gold(item) >= CONFIG["legendary_min_gold"]
 
-    def info(self, player):
-        raw = player.get("rawChampionName", "").replace("game_character_displayname_", "")
-        for key in (raw.lower(), player.get("championName", "").lower()):
+    def _key(self, player):
+        raw = (player.get("rawChampionName") or "").replace("game_character_displayname_", "").lower()
+        for key in (raw, (player.get("championName") or "").lower()):
             if key in self.champ_info:
-                return self.champ_info[key]
+                return key
         return None
+
+    def info(self, player):
+        key = self._key(player)
+        return self.champ_info.get(key) if key else None
+
+    def tags(self, player):
+        key = self._key(player)
+        return self.champ_tags.get(key, []) if key else []
 
 
 class ClaudeCoach:
@@ -358,6 +539,52 @@ def scores_of(player):
     return scores if isinstance(scores, dict) else {}
 
 
+def killer_label(name, player=None):
+    """Readable name for whatever got the kill. Riot sends raw IDs for towers and monsters."""
+    if player:
+        return player.get("championName") or name or "something"
+    if not name or not isinstance(name, str):
+        return "something"
+    low = name.lower()
+    if low.startswith("turret"):
+        return "a tower"
+    if "baron" in low:
+        return "Baron"
+    if "dragon" in low:
+        return "the dragon"
+    if "herald" in low:
+        return "Herald"
+    if "horde" in low or "voidgrub" in low:
+        return "void grubs"
+    if "minion" in low:
+        return "minions"
+    if low.startswith("sru_") or low.startswith("sru"):
+        return "a jungle camp"
+    return name
+
+
+def game_key(data):
+    """Stable id for one match: the ten players. Used to merge restarts into one report."""
+    ids = []
+    for player in as_list((data or {}).get("allPlayers")):
+        if isinstance(player, dict):
+            ids.append(str(player.get("riotId") or player.get("summonerName") or player.get("championName") or ""))
+    if not ids:
+        return None
+    return hashlib.sha1("|".join(sorted(ids)).encode("utf-8")).hexdigest()[:8]
+
+
+def result_of(raw):
+    if not isinstance(raw, str):
+        return ""
+    raw = raw.strip().lower()
+    if raw in ("win", "victory", "won"):
+        return "win"
+    if raw in ("lose", "loss", "lost", "defeat", "fail"):
+        return "loss"
+    return ""
+
+
 class Coach:
     def __init__(self, speaker, dd, claude=None, bus=None, me_name=None):
         self.say = speaker.say
@@ -371,6 +598,7 @@ class Coach:
     def reset(self):
         self.last_event_id = -1
         self.first_tick = True
+        self.quiet = False
         self.missed_me = False
         self.spawns = {
             "dragon": CONFIG["dragon_first_spawn"],
@@ -381,10 +609,12 @@ class Coach:
         self.warned = set()
         self.prev_t = 0
         self.last_cs = 0
+        self.last_stuck = -999
+        self.cs_checks = 0
         self.last_gold_bank = -999
         self.last_diff_time = 0
         self.last_diff_said = 0
-        self.last_swing_time = -999
+        self.last_low_voice = -999
         self.deaths = 0
         self.enemy_legendaries = {}
         self.profile_done = False
@@ -393,8 +623,10 @@ class Coach:
         self.recent = []
         self.spikes = []
         self.seen_events = set()
-        self.dragon_kills = 0
+        self.dragon_count = {}
+        self.soul_team = None
         self.elder = False
+        self.grub_group = None
         self.death_log = []
         self.objectives = []
         self.cs_marks = {}
@@ -407,10 +639,16 @@ class Coach:
         self.move_speed = 0
         self.last_shop_key = None
         self.last_shop_said = -999
+        self.shop_said = {}
         self.pattern_said = set()
+        self.pattern_last = {}
         self.guidance = ""
         self.cs_rates = []
         self.sample_prev = 0
+        self.boots_seen = False
+        self.boots_upgraded = False
+        self.voiced = 0
+        self.game_id = None
         self.t = 0
         self.players = []
         self.me = None
@@ -419,20 +657,50 @@ class Coach:
         self.my_names = set()
         self.last_ui_diff = 0
 
+    # ----- output -------------------------------------------------------
     def note(self, text):
         self.recent.append((self.t, text, time.time()))
         self.recent = [row for row in self.recent if self.t - row[0] < 180]
 
-    def speak(self, text):
+    def speak(self, text, priority=P_NORMAL, ttl=None):
+        """Everything goes to the overlay feed. Voice is rationed by priority."""
         self.note(text)
-        self.say(text)
+        if self.quiet:
+            return
+        if priority == P_LOW:
+            if self.t - self.last_low_voice < CONFIG["low_voice_gap"]:
+                priority = P_QUIET
+            else:
+                self.last_low_voice = self.t
+        if priority > P_QUIET:
+            self.voiced += 1
+        try:
+            self.say(text, priority=priority, ttl=ttl)
+        except TypeError:
+            if priority > P_QUIET:
+                self.say(text)
 
+    # ----- lookups ------------------------------------------------------
     def player_by_name(self, name):
-        if not name:
+        if not name or not isinstance(name, str):
             return None
         for player in self.players:
             if name_hit(name, names_of(player)):
                 return player
+        # Bots are reported by champion name.
+        for player in self.players:
+            if (player.get("championName") or "").lower() == name.lower():
+                return player
+        return None
+
+    def event_team(self, ev):
+        killer = self.player_by_name(ev.get("KillerName"))
+        if killer:
+            return killer.get("team")
+        for name in as_list(ev.get("Assisters")):
+            helper = self.player_by_name(name)
+            if helper:
+                return helper.get("team")
         return None
 
     def team_gold(self, team):
@@ -454,6 +722,18 @@ class Coach:
             return 0
         return self.team_gold(self.my_team) - self.team_gold(enemy_team)
 
+    def dragons(self):
+        us = self.dragon_count.get(self.my_team, 0)
+        them = sum(count for team, count in self.dragon_count.items() if team != self.my_team)
+        return us, them
+
+    def lane_opponent(self):
+        pos = norm_pos((self.me or {}).get("position"))
+        if not pos:
+            return None
+        return next((player for player in self.enemies if norm_pos(player.get("position")) == pos), None)
+
+    # ----- main tick ----------------------------------------------------
     def tick(self, data):
         game = data.get("gameData") if isinstance(data.get("gameData"), dict) else {}
         try:
@@ -465,10 +745,9 @@ class Coach:
         active = data.get("activePlayer") if isinstance(data.get("activePlayer"), dict) else {}
         mine = names_of(active)
         if self.me_name:
-            mine.add(self.me_name)
-            mine.add(self.me_name.lower())
-            mine.add(self.me_name.split("#")[0])
-            mine.add(self.me_name.split("#")[0].lower())
+            for value in (self.me_name, self.me_name.split("#")[0]):
+                mine.add(value)
+                mine.add(value.lower())
         self.me = next((player for player in self.players if names_of(player) & mine), None)
         stats = active.get("championStats") if isinstance(active.get("championStats"), dict) else {}
         try:
@@ -481,11 +760,15 @@ class Coach:
                 self.missed_me = True
             return
         self.missed_me = False
+        if self.game_id is None:
+            self.game_id = game_key(data)
         self.my_team = self.me.get("team")
         self.enemies = [player for player in self.players if player.get("team") != self.my_team]
         self.my_names = names_of(self.me) | mine
 
+        # Joined mid-game (or restarted): rebuild history silently, then say one line.
         late = self.first_tick and self.t > 30
+        self.quiet = late
         events = data.get("events")
         if isinstance(events, dict):
             event_list = events.get("Events") or []
@@ -493,24 +776,60 @@ class Coach:
             event_list = events
         else:
             event_list = []
-        self.handle_events(as_list(event_list), silent=late)
+        self.track_boots(late)
+        self.handle_events(as_list(event_list))
+        self.flush_grubs(force=self.quiet)
+        if self.game_over:
+            # The API keeps answering for a few seconds after the nexus falls; stay quiet.
+            self.quiet = False
+            self.publish()
+            self.first_tick = False
+            return
         if self.first_tick:
             self.prev_t = self.t
             self.reconcile_clock()
         else:
             self.objective_timers()
         self.enemy_comp()
-        self.enemy_items(silent=self.first_tick)
+        self.enemy_items()
         self.levels()
         self.cs_check()
         self.gold_bank(active)
-        self.gold_diff()
         self.sample()
+        self.gold_diff()
         self.shop_check(active)
         self.pattern_check()
         self.claude_checkin(periodic=True)
+        if late:
+            self.quiet = False
+            self.speak(self.sync_line(), P_NORMAL)
         self.publish()
         self.first_tick = False
+
+    def sync_line(self):
+        line = "Coach synced at %s." % fmt_time(self.t)
+        upcoming = [(at - self.t, obj) for obj, at in self.spawns.items() if at - self.t > 0]
+        if upcoming:
+            remain, obj = min(upcoming)
+            label = {"dragon": "Elder" if self.soul_team else "Dragon", "grubs": "Void grubs",
+                     "herald": "Herald", "baron": "Baron"}.get(obj, obj)
+            line += " %s in %s." % (label, fmt_time(remain))
+        return line
+
+    def track_boots(self, late=False):
+        for item in as_list(self.me.get("items")):
+            if not isinstance(item, dict):
+                continue
+            is_boots = getattr(self.dd, "is_boots", None)
+            boots = is_boots(item) if is_boots else "Boots" in (item.get("displayName") or "")
+            if boots:
+                self.boots_seen = True
+                if item.get("itemID") != 1001:
+                    self.boots_upgraded = True
+        # Bot lane's role quest moves finished boots out of the item list. If we join
+        # late and cannot see them, trust the quest instead of nagging.
+        if late and norm_pos(self.me.get("position")) == "BOTTOM" and self.t >= 15 * 60:
+            self.boots_seen = self.boots_upgraded = True
 
     def sample(self):
         cs = scores_of(self.me).get("creepScore", 0)
@@ -531,8 +850,11 @@ class Coach:
         if self.t >= CONFIG["herald_despawn"] and self.spawns.get("herald", 0) <= CONFIG["herald_first_spawn"]:
             self.spawns.pop("herald", None)
 
-    def handle_events(self, events, silent):
+    # ----- events -------------------------------------------------------
+    def handle_events(self, events):
         for idx, ev in enumerate(events):
+            if not isinstance(ev, dict):
+                continue
             eid = ev.get("EventID")
             if eid is None:
                 eid = idx
@@ -540,77 +862,123 @@ class Coach:
                 continue
             self.last_event_id = eid
             name = ev.get("EventName")
-            et = ev.get("EventTime", self.t)
+            try:
+                et = float(ev.get("EventTime", self.t))
+            except (TypeError, ValueError):
+                et = self.t
             if name and name not in self.seen_events:
                 self.seen_events.add(name)
-                print("[event] %s" % name, flush=True)
                 if self.on_new_event:
                     self.on_new_event(name)
-            killer = self.player_by_name(ev.get("KillerName", ""))
-            ours = killer is not None and killer.get("team") == self.my_team
-            who = "We" if ours else "They"
-            out = None
+            team = self.event_team(ev)
+            who = "We" if team is not None and team == self.my_team else "They"
 
             if name == "DragonKill":
-                self.dragon_kills += 1
-                kind = ev.get("DragonType") or "a"
-                stolen = " Stolen!" if is_stolen(ev) else ""
-                if self.dragon_kills >= 4:
-                    self.elder = True
-                    nxt = et + CONFIG["elder_respawn"]
-                    out = "%s took %s dragon.%s Dragon soul. Elder next at %s." % (who, kind, stolen, fmt_time(nxt))
-                else:
-                    nxt = et + CONFIG["dragon_respawn"]
-                    out = "%s took %s dragon.%s Next dragon at %s." % (who, kind, stolen, fmt_time(nxt))
-                self.spawns["dragon"] = nxt
-                self.objectives.append({"t": et, "name": "dragon", "who": who, "detail": kind})
+                self.on_dragon(ev, et, team, who)
             elif name == "BaronKill":
                 nxt = et + CONFIG["baron_respawn"]
                 self.spawns["baron"] = nxt
                 self.objectives.append({"t": et, "name": "baron", "who": who, "detail": ""})
-                out = "%s took Baron. Buff lasts about 3 minutes. Next Baron at %s." % (who, fmt_time(nxt))
+                stolen = " Stolen!" if is_stolen(ev) else ""
+                self.speak("%s took Baron.%s Buff for about 3 minutes. Next Baron at %s." % (who, stolen, fmt_time(nxt)), P_URGENT, 15)
             elif name == "HeraldKill":
                 self.spawns.pop("herald", None)
                 self.objectives.append({"t": et, "name": "herald", "who": who, "detail": ""})
-                out = "%s took Herald." % who
+                self.speak("%s took Herald." % who, P_NORMAL)
             elif name in ("HordeKill", "VoidGrubKill"):
-                self.spawns.pop("grubs", None)
-                self.objectives.append({"t": et, "name": "grubs", "who": who, "detail": ""})
-                out = "%s took a void grub." % who
+                self.add_grub(et, who)
             elif name == "ChampionKill" and name_hit(ev.get("VictimName"), self.my_names):
-                self.deaths += 1
-                if not silent:
-                    self.on_death(ev)
+                self.on_death(ev, et)
             elif name == "Ace":
                 team = ev.get("AcingTeam")
                 if team:
-                    out = (
-                        "Ace. Their whole team is down - look for an objective."
-                        if team == self.my_team
-                        else "We got aced. Reset together."
-                    )
+                    if team == self.my_team:
+                        self.speak("Ace. Their whole team is down. Take an objective.", P_URGENT)
+                    else:
+                        self.speak("We got aced. Reset together.", P_URGENT)
             elif name == "InhibKilled":
-                out = "An inhibitor just fell."
+                if team is None:
+                    self.speak("An inhibitor fell.", P_LOW)
+                elif who == "We":
+                    self.speak("We took an inhibitor. Push with the super minions.", P_LOW)
+                else:
+                    self.speak("We lost an inhibitor. Clear the super minions.", P_NORMAL)
             elif name == "GameEnd":
                 self.game_over = True
                 winning = ev.get("WinningTeam")
                 if winning and self.my_team:
                     self.result = "win" if str(winning) == str(self.my_team) else "loss"
-                raw = ev.get("Result")
-                if isinstance(raw, str) and raw.lower() in ("win", "victory"):
-                    self.result = "win"
-                elif isinstance(raw, str) and raw.lower() in ("loss", "defeat", "fail"):
-                    self.result = "loss"
-                out = "Game over. %s" % focus_line(self)
+                self.result = result_of(ev.get("Result")) or self.result
+                self.speak("Game over. %s" % focus_line(self), P_URGENT, 20)
 
-            if out and not silent:
-                self.speak(out)
-            elif out and silent:
-                self.note(out)
+    def on_dragon(self, ev, et, team, who):
+        kind = (ev.get("DragonType") or "").strip()
+        stolen = " Stolen!" if is_stolen(ev) else ""
+        ours = who == "We"
+        if kind.lower() == "elder":
+            nxt = et + CONFIG["elder_respawn"]
+            self.objectives.append({"t": et, "name": "elder", "who": who, "detail": ""})
+            self.speak("%s took Elder.%s Next Elder at %s." % (who, stolen, fmt_time(nxt)), P_URGENT, 15)
+        else:
+            if team:
+                self.dragon_count[team] = self.dragon_count.get(team, 0) + 1
+            us, them = self.dragons()
+            label = ("%s dragon" % kind) if kind else "the dragon"
+            if team and self.soul_team is None and self.dragon_count[team] >= CONFIG["soul_dragons"]:
+                self.soul_team = team
+                self.elder = True
+                nxt = et + CONFIG["elder_respawn"]
+                self.speak("%s took %s.%s %s soul. Elder at %s." % (
+                    who, label, stolen, "Our" if ours else "Their", fmt_time(nxt)), P_URGENT, 15)
+            else:
+                nxt = et + (CONFIG["elder_respawn"] if self.soul_team else CONFIG["dragon_respawn"])
+                self.speak("%s took %s.%s Dragons %d to %d. Next at %s." % (
+                    who, label, stolen, us, them, fmt_time(nxt)), P_NORMAL)
+            self.objectives.append({"t": et, "name": "dragon", "who": who, "detail": kind})
+        self.spawns["dragon"] = nxt
 
-    def on_death(self, ev):
-        killer = self.player_by_name(ev.get("KillerName", ""))
-        by = killer.get("championName") if killer else (ev.get("KillerName") or "something")
+    def add_grub(self, et, who):
+        group = self.grub_group
+        if group is None or et - group["last"] > CONFIG["grub_group_seconds"]:
+            self.flush_grubs(force=True)
+            group = self.grub_group = {"start": et, "last": et, "us": 0, "them": 0}
+        group["last"] = et
+        group["us" if who == "We" else "them"] += 1
+        self.spawns.pop("grubs", None)
+
+    def flush_grubs(self, force=False):
+        group = self.grub_group
+        if not group:
+            return
+        total = group["us"] + group["them"]
+        if not force and total < 3 and self.t - group["last"] < CONFIG["grub_group_seconds"]:
+            return
+        self.grub_group = None
+
+        def count(n):
+            return "all 3 void grubs" if n == 3 else ("%d void grub%s" % (n, "" if n == 1 else "s"))
+
+        if group["them"] == 0:
+            line = "We took %s." % count(group["us"])
+        elif group["us"] == 0:
+            line = "They took %s." % count(group["them"])
+        else:
+            line = "Grubs split. We took %d, they took %d." % (group["us"], group["them"])
+        self.objectives.append({
+            "t": group["start"],
+            "name": "grubs",
+            "who": "We" if group["us"] >= group["them"] else "They",
+            "detail": "%d-%d" % (group["us"], group["them"]),
+        })
+        self.speak(line, P_NORMAL)
+
+    def on_death(self, ev, et):
+        self.deaths += 1
+        killer = self.player_by_name(ev.get("KillerName"))
+        by = killer_label(ev.get("KillerName"), killer)
+        self.death_log.append({"t": et, "by": by})
+        if self.quiet:
+            return
         timer = 0
         try:
             timer = int(float(self.me.get("respawnTimer", 0) or 0))
@@ -619,39 +987,43 @@ class Coach:
         msg = "Death %d, to %s." % (self.deaths, by)
         if timer:
             msg += " %d seconds." % timer
-        if self.t < 600 and self.deaths >= 3:
+        if self.t < 600 and self.deaths == 3:
             msg += " Three early deaths. Farm and stay alive for a bit."
-        self.death_log.append({"t": self.t, "by": by})
-        self.speak(msg)
+        self.speak(msg, P_URGENT, 10)
         pattern = self.fresh_pattern()
         if self.claude:
             self.claude_checkin(trigger="I just died to %s." % by)
         elif pattern:
-            self.speak(pattern)
-        else:
-            self.say(random.choice(DEATH_QUESTIONS))
+            self.speak(pattern, P_NORMAL, 20)
+        elif self.deaths % 2 == 1:
+            # A reflection question every other death; more than that becomes background noise.
+            self.speak(random.choice(DEATH_QUESTIONS), P_NORMAL, 20)
 
+    # ----- clocks -------------------------------------------------------
     def objective_timers(self):
         prev = self.prev_t
-        labels = {"dragon": "Elder" if self.elder else "Dragon", "grubs": "Void grubs", "herald": "Herald", "baron": "Baron"}
+        labels = {"dragon": "Elder" if self.soul_team else "Dragon", "grubs": "Void grubs",
+                  "herald": "Herald", "baron": "Baron"}
         for obj, at in (("grubs", CONFIG["grubs_despawn"]), ("herald", CONFIG["herald_despawn"])):
             if obj in self.spawns and prev < at <= self.t:
                 self.spawns.pop(obj, None)
-                self.speak("%s left the pit." % labels[obj])
+                self.speak("%s left the pit." % labels[obj], P_LOW)
         for obj, at in list(self.spawns.items()):
             for warn in CONFIG["objective_warn_seconds"]:
                 mark = at - warn
                 key = (obj, at, warn)
                 if prev < mark <= self.t and key not in self.warned:
                     self.warned.add(key)
-                    self.speak("%s in %d seconds." % (labels[obj], warn))
+                    self.speak("%s in %d seconds." % (labels[obj], warn),
+                               P_URGENT if warn <= 30 else P_NORMAL, 8 if warn <= 30 else 12)
             key = (obj, at, 0)
             if prev < at <= self.t and key not in self.warned:
                 self.warned.add(key)
                 verb = "are" if obj == "grubs" else "is"
-                self.speak("%s %s up." % (labels[obj], verb))
+                self.speak("%s %s up." % (labels[obj], verb), P_URGENT, 10)
         self.prev_t = self.t
 
+    # ----- reads --------------------------------------------------------
     def enemy_comp(self):
         if self.profile_done or self.t < 15:
             return
@@ -666,13 +1038,20 @@ class Coach:
             else:
                 ad += 1
         if ap >= 4:
-            self.speak("Enemy comp leans magic damage - %d AP threats. Magic resist will go a long way." % ap)
+            self.speak("Enemy comp is magic damage. %d AP threats. Magic resist goes a long way." % ap, P_NORMAL)
         elif ad >= 4:
-            self.speak("Enemy comp leans physical - %d AD threats. Armor will go a long way." % ad)
+            self.speak("Enemy comp is physical. %d AD threats. Armor goes a long way." % ad, P_NORMAL)
         else:
-            self.speak("Enemy damage is mixed - %d AD, %d AP." % (ad, ap))
+            self.speak("Enemy damage is mixed, %d AD and %d AP." % (ad, ap), P_LOW)
 
-    def enemy_items(self, silent):
+    def enemy_items(self):
+        opp = self.lane_opponent()
+        fed = None
+        kills = [(scores_of(player).get("kills", 0) or 0, player) for player in self.enemies]
+        if kills:
+            top_kills, top = max(kills, key=lambda row: row[0])
+            if top_kills >= 5:
+                fed = top
         for player in self.enemies:
             champ = player.get("championName", "?")
             seen = self.enemy_legendaries.setdefault(champ, set())
@@ -686,8 +1065,13 @@ class Coach:
                 label = "Enemy %s finished %s." % (champ, item.get("displayName", "an item"))
                 self.spikes.append(label)
                 self.spikes = self.spikes[-8:]
-                if not silent:
-                    self.speak(label)
+                if self.first_tick:
+                    continue
+                # Voice only the threats that matter to you. The rest stays on the overlay.
+                if player is opp or player is fed:
+                    self.speak(label, P_LOW)
+                else:
+                    self.speak(label, P_QUIET)
 
     def levels(self):
         try:
@@ -696,20 +1080,19 @@ class Coach:
             my_level = 0
         if not self.me6 and my_level >= 6:
             self.me6 = True
-            self.speak("Level 6. Ult is online.")
-        pos = norm_pos(self.me.get("position"))
-        if not self.opp6 and pos:
-            opp = next((player for player in self.enemies if norm_pos(player.get("position")) == pos), None)
+            self.speak("Level 6. Ult is online.", P_NORMAL)
+        opp = self.lane_opponent()
+        if not self.opp6 and opp:
             try:
-                opp_level = int(opp.get("level") or 0) if opp else 0
+                opp_level = int(opp.get("level") or 0)
             except (TypeError, ValueError):
                 opp_level = 0
-            if opp and opp_level >= 6:
+            if opp_level >= 6:
                 self.opp6 = True
                 label = "Their %s just hit 6. Respect the ult." % opp.get("championName")
                 self.spikes.append(label)
                 self.spikes = self.spikes[-8:]
-                self.speak(label)
+                self.speak(label, P_NORMAL)
 
     def cs_check(self):
         if norm_pos(self.me.get("position")) == "UTILITY" or self.t < 150:
@@ -717,21 +1100,26 @@ class Coach:
         if self.t - self.last_cs < CONFIG["cs_check_every"]:
             return
         self.last_cs = self.t
-        cs = scores_of(self.me).get("creepScore", 0)
         try:
-            cs = int(cs)
+            cs = int(scores_of(self.me).get("creepScore", 0) or 0)
         except (TypeError, ValueError):
             cs = 0
         rate = cs / (self.t / 60.0) if self.t else 0
         target = CONFIG["cs_target_per_min"]
         self.cs_rates.append((self.t, rate))
         self.cs_rates = self.cs_rates[-6:]
-        msg = "%d minutes, %s CS. %.1f per minute." % (int(self.t // 60), int(cs), rate)
-        if rate < target - 1.5 and not self._cs_is_stuck():
-            msg += " Target is %g." % target
-        elif self._cs_is_stuck():
-            msg = "CS has been under 5 all game. Catch the wave before you fight."
-        self.speak(msg)
+        if self._cs_is_stuck():
+            if self.t - self.last_stuck >= 600:
+                self.last_stuck = self.t
+                self.speak("CS is under 5 and a half a minute. Catch waves before you fight.", P_NORMAL)
+            return
+        msg = "%d minutes, %d CS. %.1f a minute." % (int(self.t // 60), cs, rate)
+        self.cs_checks = getattr(self, "cs_checks", 0) + 1
+        if rate < target - 1.5:
+            self.speak(msg + " Target is %g." % target, P_LOW if self.cs_checks % 2 == 1 else P_QUIET)
+        else:
+            # On pace: say it now and then, otherwise just show it.
+            self.speak(msg, P_LOW if self.cs_checks % 3 == 1 else P_QUIET)
 
     def gold_bank(self, active):
         try:
@@ -743,28 +1131,31 @@ class Coach:
         if self.t - self.last_gold_bank < CONFIG["gold_bank_cooldown"]:
             return
         self.last_gold_bank = self.t
-        self.speak("%d gold banked." % int(gold))
+        self.speak("%d gold banked." % int(gold), P_LOW)
 
     def gold_diff(self):
-        if not self.enemies or self.t < 240:
+        """Every five minutes, the item-gold lead averaged over the last three samples.
+
+        A raw reading swings 3-4k whenever one team backs and shops, so it is never
+        spoken on its own. The overlay bar shows the live number.
+        """
+        if not self.enemies or self.t < 240 or not getattr(self.dd, "ok", True):
             return
-        diff = self.live_diff()
-        periodic = self.t - self.last_diff_time >= CONFIG["gold_diff_every"]
-        swing = abs(diff - self.last_diff_said) >= CONFIG["gold_swing_alert"] and self.t - self.last_swing_time > 60
-        if not (periodic or swing):
+        if self.t - self.last_diff_time < CONFIG["gold_diff_every"]:
             return
         self.last_diff_time = self.t
+        recent = [diff for _stamp, diff in self.gold_curve[-3:]] or [self.live_diff()]
+        diff = sum(recent) / float(len(recent))
         self.last_diff_said = diff
-        if swing:
-            self.last_swing_time = self.t
-        if abs(diff) < 500:
-            self.speak("Item gold is even.")
+        if abs(diff) < 750:
+            line = "Item gold is about even."
         else:
-            side = "up" if diff > 0 else "down"
-            self.speak("Item gold: %s %.1fk." % (side, abs(diff) / 1000.0))
+            line = "Item gold %s about %.1fk." % ("up" if diff > 0 else "down", abs(diff) / 1000.0)
+        self.speak(line, P_LOW)
 
+    # ----- optional LLM -------------------------------------------------
     def claude_checkin(self, periodic=False, trigger=None):
-        if not self.claude or self.t < 90:
+        if not self.claude or self.t < 90 or self.quiet:
             return
         if periodic and self.t - self.last_claude < CONFIG["claude_every"]:
             return
@@ -793,23 +1184,24 @@ class Coach:
             )
 
         allies = [player for player in self.players if player.get("team") == self.my_team]
-        diff = self.live_diff()
+        us, them = self.dragons()
         spawns = ", ".join("%s at %s" % (key, fmt_time(value)) for key, value in self.spawns.items())
         recent = "; ".join("%s %s" % (fmt_time(row[0]), row[1]) for row in self.recent[-8:]) or "none"
         return (
             "Game time %s. Trigger: %s\nME: %s\nALLIES:\n%s\nENEMIES:\n%s\n"
-            "Team item gold diff (us minus them): %s\nUpcoming objective spawns: %s\nRecent callouts: %s"
+            "Team item gold diff (us minus them): %s\nDragons us %d, them %d\n"
+            "Upcoming objective spawns: %s\nRecent callouts: %s"
             % (
-                fmt_time(self.t),
-                trigger,
-                line(self.me),
+                fmt_time(self.t), trigger, line(self.me),
                 "\n".join(line(player) for player in allies),
                 "\n".join(line(player) for player in self.enemies),
-                diff,
-                spawns,
-                recent,
+                self.live_diff(), us, them, spawns, recent,
             )
         )
+
+    # ----- shop + patterns ----------------------------------------------
+    def has_boots_for_shop(self):
+        return self.boots_upgraded or shop.quest_slot_boots(norm_pos((self.me or {}).get("position")), self.move_speed)
 
     def shop_check(self, active):
         try:
@@ -817,40 +1209,45 @@ class Coach:
         except (TypeError, ValueError):
             gold = 0
         me = dict(self.me)
+        me["position"] = norm_pos(me.get("position"))
         me["_info"] = self.dd.info(self.me) or {}
-        me["_ad"] = sum(1 for enemy in self.enemies if (self.dd.info(enemy) or {}).get("attack", 0) >= (self.dd.info(enemy) or {}).get("magic", 0))
+        tags = getattr(self.dd, "tags", None)
+        me["_tags"] = tags(self.me) if tags else []
+        infos = [self.dd.info(enemy) or {} for enemy in self.enemies]
+        me["_ad"] = sum(1 for info in infos if info.get("attack", 0) >= info.get("magic", 0))
         me["_ap"] = len(self.enemies) - me["_ad"]
         me["_move_speed"] = self.move_speed
+        me["_has_boots"] = self.has_boots_for_shop()
         allies = [player for player in self.players if player.get("team") == self.my_team and player is not self.me]
         catalog = getattr(self.dd, "catalog", None) or {"_by_name": {}}
         advice = shop.advise(me, self.enemies, gold, catalog, self.t, allies=allies, deaths=self.deaths)
         self.shop_lines = advice.get("lines") or []
         key = advice.get("key")
-        if not advice.get("speak") or key is None:
+        if not advice.get("speak") or key is None or self.quiet:
             return
-        if key == self.last_shop_key and self.t - self.last_shop_said < 90:
+        # Each suggestion is spoken once, with one reminder four minutes later. It stays on the overlay.
+        said = self.shop_said.get(key, [])
+        if len(said) >= 2 or (said and self.t - said[-1] < 240):
             return
         if self.t - self.last_shop_said < 45:
             return
+        self.shop_said[key] = said + [self.t]
         self.last_shop_key = key
         self.last_shop_said = self.t
-        self.speak(advice["speak"])
+        self.speak(advice["speak"], P_NORMAL, 30)
 
     def _pattern_state(self):
-        owned = set()
-        for item in as_list(self.me.get("items") if self.me else []):
-            if isinstance(item, dict) and item.get("itemID") is not None:
-                owned.add(int(item["itemID"]))
-        catalog = getattr(self.dd, "catalog", None) or {}
         return {
             "t": self.t,
             "deaths": self.death_log,
-            "has_boots": shop.has_boots(owned, catalog) or shop.quest_slot_boots(
-                (self.me or {}).get("position"), self.move_speed
+            "has_boots": self.boots_seen or shop.quest_slot_boots(
+                norm_pos((self.me or {}).get("position")), self.move_speed
             ),
             "cs_rates": self.cs_rates,
             "gold_curve": self.gold_curve,
             "objectives": self.objectives,
+            "lead_peak": CONFIG["lead_peak"],
+            "lead_drop": CONFIG["lead_drop"],
         }
 
     def _cs_is_stuck(self):
@@ -859,11 +1256,14 @@ class Coach:
 
     def fresh_pattern(self):
         for note in patterns.scan(self._pattern_state()):
-            if note["key"] in self.pattern_said:
+            key = note["key"]
+            if key in self.pattern_said or key == "cs-stuck":
                 continue
-            if note["key"] == "cs-stuck":
+            prefix = key.split(":")[0]
+            if self.t - self.pattern_last.get(prefix, -99999) < CONFIG["pattern_cooldown"]:
                 continue
-            self.pattern_said.add(note["key"])
+            self.pattern_said.add(key)
+            self.pattern_last[prefix] = self.t
             self.guidance = note["line"]
             return note["line"]
         return None
@@ -876,15 +1276,17 @@ class Coach:
             return
         line = self.fresh_pattern()
         if line:
-            self.speak(line)
+            self.speak(line, P_NORMAL, 20)
 
+    # ----- UI -----------------------------------------------------------
     def publish(self):
         if not self.bus or not self.me:
             return
         scores = scores_of(self.me)
         cs = scores.get("creepScore", 0)
         rate = (cs / (self.t / 60.0)) if self.t else 0
-        diff = self.live_diff()
+        diff = self.live_diff() if getattr(self.dd, "ok", True) else 0
+        us, them = self.dragons()
         state = {
             "t": self.t,
             "clock": fmt_time(self.t),
@@ -893,9 +1295,12 @@ class Coach:
             "level": self.me.get("level") or "",
             "kda": "%s/%s/%s" % (scores.get("kills", 0), scores.get("deaths", 0), scores.get("assists", 0)),
             "spawns": dict(self.spawns),
-            "elder": self.elder,
+            "elder": bool(self.soul_team),
+            "dragons": {"us": us, "them": them},
+            "soul": ("us" if self.soul_team == self.my_team else "them") if self.soul_team else "",
             "callouts": list(self.recent[-3:]),
             "gold_diff": diff,
+            "gold_ok": bool(getattr(self.dd, "ok", True)),
             "prev_gold_diff": self.last_ui_diff,
             "cs": cs,
             "cs_rate": rate,
@@ -904,6 +1309,7 @@ class Coach:
             "spikes": list(self.spikes[-4:]),
             "shop": ([self.guidance] if self.guidance else []) + list(self.shop_lines),
             "in_game": True,
+            "version": __version__,
         }
         self.last_ui_diff = diff
         self.bus.publish(state)
@@ -921,6 +1327,8 @@ class LiveClient:
 
 
 class Capture:
+    """Raw polls for debugging and regression tests. Gzipped: about 1/7 the disk of plain JSON."""
+
     def __init__(self, root):
         self.root = root
         self.dir = None
@@ -967,9 +1375,9 @@ class Capture:
         now = time.time() if now is None else now
         if not new_event and self.n and now - self.last_write < 5:
             return None
-        path = os.path.join(self.dir, "%04d.json" % self.n)
+        path = os.path.join(self.dir, "%04d.json.gz" % self.n)
         tmp = path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as handle:
+        with gzip.open(tmp, "wt", encoding="utf-8") as handle:
             json.dump(data, handle)
         os.replace(tmp, path)
         self.n += 1
@@ -977,15 +1385,31 @@ class Capture:
         return path
 
 
+def load_frames(source):
+    """Frames from a capture folder (*.json / *.json.gz) or a single .jsonl(.gz) fixture."""
+    frames = []
+    if os.path.isdir(source):
+        files = sorted(glob.glob(os.path.join(source, "*.json")) + glob.glob(os.path.join(source, "*.json.gz")))
+        for path in files:
+            opener = gzip.open if path.endswith(".gz") else open
+            with opener(path, "rt", encoding="utf-8") as handle:
+                frames.append(json.load(handle))
+    elif os.path.isfile(source):
+        opener = gzip.open if source.endswith(".gz") else open
+        with opener(source, "rt", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if line:
+                    frames.append(json.loads(line))
+    frames.sort(key=lambda frame: (frame.get("gameData") or {}).get("gameTime", 0) or 0)
+    return frames
+
+
 class ReplayClient:
     def __init__(self, folder, speed):
-        files = sorted(glob.glob(os.path.join(folder, "*.json")))
-        if not files:
-            raise SystemExit("No JSON frames in %s" % folder)
-        self.frames = []
-        for path in files:
-            with open(path, encoding="utf-8") as handle:
-                self.frames.append(json.load(handle))
+        self.frames = load_frames(folder)
+        if not self.frames:
+            raise SystemExit("No capture frames in %s" % folder)
         self.speed = speed
         self.start = time.time()
         self.origin = self.frames[0].get("gameData", {}).get("gameTime", 0) or 0
@@ -1118,12 +1542,17 @@ def focus_line(coach):
     killers = [row.get("by") for row in coach.death_log if row.get("by")]
     if killers:
         top = max(set(killers), key=killers.count)
-        if killers.count(top) >= 2 and top != "something":
+        if killers.count(top) >= 2 and top not in ("something", "a tower", "minions"):
             return "Next game: respect %s. Give the wave." % top
     return "Next game: be at the objective 30 seconds early."
 
 
+def safe_name(text):
+    return "".join(ch for ch in str(text) if ch.isalnum() or ch in "-_") or "unknown"
+
+
 def write_match_report(coach, reason, folder=None):
+    """One markdown note per match. A restart mid-game overwrites the same note instead of splitting it."""
     folder = folder or os.path.join(ROOT, "reports")
     os.makedirs(folder, exist_ok=True)
     champ = coach.me.get("championName") if coach.me else "unknown"
@@ -1131,6 +1560,7 @@ def write_match_report(coach, reason, folder=None):
     scores = scores_of(coach.me) if coach.me else {}
     kda = "%s/%s/%s" % (scores.get("kills", 0), scores.get("deaths", 0), scores.get("assists", 0))
     focus = focus_line(coach)
+    us, them = coach.dragons() if coach.my_team else (0, 0)
     lines = [
         "---",
         "type: rift-coach-match",
@@ -1138,12 +1568,14 @@ def write_match_report(coach, reason, folder=None):
         "champion: %s" % champ,
         "role: %s" % (pos or "unknown"),
         "result: %s" % (coach.result or "unknown"),
+        "kda: %s" % kda,
+        "game_id: %s" % (coach.game_id or "unknown"),
         "reason: %s" % reason,
         "---",
         "",
-        "# %s %s" % (champ, pos),
+        "# %s %s%s" % (champ, pos, (" - %s" % coach.result.upper()) if coach.result else ""),
         "",
-        "KDA %s. Game time %s." % (kda, fmt_time(coach.t)),
+        "KDA %s. Game time %s. Dragons %d to %d." % (kda, fmt_time(coach.t), us, them),
         "",
         "## CS",
     ]
@@ -1161,7 +1593,7 @@ def write_match_report(coach, reason, folder=None):
         lines.append("- none recorded")
     lines.extend(["", "## Objectives"])
     if coach.objectives:
-        for row in coach.objectives:
+        for row in sorted(coach.objectives, key=lambda item: item.get("t", 0)):
             detail = (" " + row["detail"]) if row.get("detail") else ""
             lines.append("- %s %s %s%s" % (fmt_time(row.get("t", 0)), row.get("who"), row.get("name"), detail))
     else:
@@ -1173,9 +1605,11 @@ def write_match_report(coach, reason, folder=None):
     else:
         lines.append("- not sampled")
     lines.extend(["", "## Focus", focus, ""])
-    path = os.path.join(folder, "%s-%s.md" % (time.strftime("%Y%m%d-%H%M%S"), champ))
-    with open(path, "w", encoding="utf-8") as handle:
+    name = "%s-%s-%s.md" % (time.strftime("%Y%m%d"), safe_name(champ), coach.game_id or time.strftime("%H%M%S"))
+    path = os.path.join(folder, name)
+    with open(path + ".tmp", "w", encoding="utf-8") as handle:
         handle.write("\n".join(lines))
+    os.replace(path + ".tmp", path)
     return path
 
 
@@ -1202,22 +1636,41 @@ def publish_wait(coach):
 def finish_game(coach, reason, live):
     if not live or coach.reported or not coach.me or coach.t < 30:
         return None
-    path = write_match_report(coach, reason)
+    try:
+        path = write_match_report(coach, reason)
+    except OSError as exc:
+        # OneDrive or antivirus can briefly lock the file. Never take the coach down for it.
+        print("Match note not written (%s: %s)." % (type(exc).__name__, exc), flush=True)
+        return None
     coach.reported = True
     print("Match note: %s" % path, flush=True)
     return path
 
 
-def run_loop(args, speaker, coach, client, capture, stop):
+POLL_ERRORS = (urllib.error.URLError, ConnectionError, OSError, ValueError, json.JSONDecodeError, AttributeError)
+
+
+def run_loop(args, speaker, coach, client, capture, stop, sleep=time.sleep, clock=time.monotonic):
+    """Poll -> coach.tick. Survives API hiccups: one bad poll never ends a game.
+
+    - Failures shorter than CONFIG["disconnect_grace"] are ignored.
+    - After a longer outage, the same match (same ten players, clock not rewound)
+      resumes with its history instead of starting over.
+    """
     in_game = False
     last_t = -1
     waiting_shown = False
+    fail_since = None
     last_tick_error = None
-    delay = 0.05 if (args.demo or args.replay) else CONFIG["poll_seconds"]
-    live = not (args.demo or args.replay)
-    print("Macro Goblin running. Ctrl+C to quit.", flush=True)
+    replaying = bool(getattr(args, "demo", False) or getattr(args, "replay", None))
+    delay = 0.05 if replaying else CONFIG["poll_seconds"]
+    live = not replaying
+    grace = 0 if replaying else CONFIG["disconnect_grace"]
+    print("Macro Goblin %s running. Ctrl+C to quit." % __version__, flush=True)
     if speaker.mode == "win":
-        print("Voice: Microsoft Zira. Hide overlay: Ctrl+Shift+O. League must be Borderless.", flush=True)
+        print("Voice on. Hide overlay: Ctrl+Shift+O. League must be Borderless.", flush=True)
+    elif speaker.mode:
+        print("Voice on (%s)." % speaker.mode, flush=True)
     else:
         print("Text only. Hide overlay: Ctrl+Shift+O. League must be Borderless.", flush=True)
     publish_wait(coach)
@@ -1229,8 +1682,13 @@ def run_loop(args, speaker, coach, client, capture, stop):
                 if t is None or not isinstance(data, dict) or "activePlayer" not in data:
                     raise ValueError("loading")
                 t = float(t)
-            except (urllib.error.URLError, ConnectionError, OSError, ValueError, json.JSONDecodeError, AttributeError):
+            except POLL_ERRORS:
                 if in_game:
+                    if fail_since is None:
+                        fail_since = clock()
+                    if clock() - fail_since < grace:
+                        sleep(1)
+                        continue
                     finish_game(coach, "client closed", live)
                     print("Game closed. Waiting for the next one...", flush=True)
                     in_game = False
@@ -1239,22 +1697,41 @@ def run_loop(args, speaker, coach, client, capture, stop):
                     print("Waiting for a game to start...", flush=True)
                     publish_wait(coach)
                 waiting_shown = True
-                time.sleep(2)
+                sleep(2)
                 continue
+            fail_since = None
 
-            if not in_game or t < last_t - 5:
-                if in_game:
-                    finish_game(coach, "new game", live)
-                coach.reset()
-                if capture:
-                    capture.begin()
-                    coach.on_new_event = capture.note_event
+            same_match = (
+                last_t >= 0
+                and coach.game_id is not None
+                and game_key(data) == coach.game_id
+                and t >= last_t - 5
+            )
+            if in_game and t < last_t - 5:
+                finish_game(coach, "new game", live)
+                in_game = False
+                same_match = False
+            if not in_game:
+                if same_match:
+                    # Long outage, same match: keep history, capture folder, and report.
+                    # Re-sync quietly so timers crossed during the gap are not all spoken at once.
+                    coach.reported = False
+                    coach.first_tick = True
+                    print("Reconnected to the same game at %s." % fmt_time(t), flush=True)
+                else:
+                    coach.reset()
+                    if capture:
+                        capture.begin()
+                        coach.on_new_event = capture.note_event
+                    speaker.say("Coach online. Let's get it.", P_NORMAL)
                 in_game = True
                 waiting_shown = False
-                speaker.say("Coach online. Let's get it.")
             last_t = t
             if capture:
-                capture.maybe_write(data)
+                try:
+                    capture.maybe_write(data)
+                except OSError as exc:
+                    print("Capture write skipped (%s)." % type(exc).__name__, flush=True)
             try:
                 coach.tick(data)
                 last_tick_error = None
@@ -1265,19 +1742,22 @@ def run_loop(args, speaker, coach, client, capture, stop):
                     last_tick_error = msg
             if coach.game_over:
                 finish_game(coach, "game end", live)
-            if args.demo and t > 1700:
-                speaker.say("Demo complete.")
-                time.sleep(0.4)
+            if isinstance(client, MockGame) and t > 1700:
+                speaker.say("Demo complete.", P_NORMAL)
+                sleep(0.4)
                 break
             if isinstance(client, ReplayClient) and client.clock() >= client.end_time + 2:
-                speaker.say("Replay complete.")
-                time.sleep(0.2)
+                speaker.say("Replay complete.", P_NORMAL)
+                sleep(0.2)
                 break
-            time.sleep(delay)
+            sleep(delay)
     except KeyboardInterrupt:
         finish_game(coach, "stopped", live)
         print("\nCoach signing off.")
     finally:
+        # Also covers stops from the overlay (window closed, Ctrl+C in the UI thread).
+        if in_game:
+            finish_game(coach, "stopped", live)
         if capture:
             capture.close()
         stop.set()
@@ -1309,7 +1789,8 @@ def doctor_check():
         latest = versions[0] if versions else "unknown"
         add("Riot Data Dragon", True, "latest patch %s" % latest)
     except Exception as exc:
-        add("Riot Data Dragon", False, "%s: %s" % (type(exc).__name__, exc))
+        cached = glob.glob(os.path.join(ROOT, "cache", "ddragon-*.json.gz"))
+        add("Riot Data Dragon", bool(cached), "offline; using cached game data" if cached else "%s: %s" % (type(exc).__name__, exc))
 
     try:
         LiveClient().get()
@@ -1320,7 +1801,7 @@ def doctor_check():
     add("Claude / LLM", True, "not required; only used with --claude and ANTHROPIC_API_KEY")
     add("Safety posture", True, "read-only local Riot API; no memory reads, hooks, injection, or packet sniffing")
 
-    print("Macro Goblin doctor")
+    print("Macro Goblin %s doctor" % __version__)
     hard_fail = False
     for name, ok, detail in rows:
         mark = "OK" if ok else "WARN"
@@ -1337,7 +1818,8 @@ def doctor_check():
 def build_arg_parser():
     parser = argparse.ArgumentParser(description="Macro Goblin - local League macro companion")
     parser.add_argument("--doctor", action="store_true", help="run setup checks and exit")
-    parser.add_argument("--demo", action="store_true", help="run a simulated game")
+    parser.add_argument("--demo", action="store_true", help="replay a real anonymized match (no League needed)")
+    parser.add_argument("--synthetic", action="store_true", help="with --demo: use the old scripted fake game")
     parser.add_argument("--speed", type=float, default=10, help="demo/replay speed multiplier")
     parser.add_argument("--no-voice", action="store_true", help="print callouts only")
     parser.add_argument("--claude", action="store_true", help="add Claude tips (needs ANTHROPIC_API_KEY)")
@@ -1348,6 +1830,7 @@ def build_arg_parser():
     parser.add_argument("--web", action="store_true", help="serve panels on 127.0.0.1:8765 only")
     parser.add_argument("--log", action="store_true", help="append callouts to logs/")
     parser.add_argument("--me", help="summoner name if auto-detect fails")
+    parser.add_argument("--version", action="version", version="Macro Goblin %s" % __version__)
     return parser
 
 
@@ -1377,6 +1860,10 @@ def main(argv=None):
     speaker.clock = lambda: coach.t
     if args.replay:
         client = ReplayClient(args.replay, args.speed)
+    elif args.demo and os.path.exists(DEMO_GAME) and not args.synthetic:
+        # A real, anonymized ranked game (Kai'Sa bot lane) played back at --speed.
+        client = ReplayClient(DEMO_GAME, args.speed)
+        print("Demo: replaying a real anonymized match at %gx speed." % args.speed, flush=True)
     elif args.demo:
         client = MockGame(args.speed)
     else:
@@ -1392,20 +1879,32 @@ def main(argv=None):
         target=run_loop, args=(args, speaker, coach, client, capture, stop), daemon=True
     )
     worker.start()
-    if args.web:
-        import web_dash
-        threading.Thread(target=web_dash.serve, args=(bus, stop), daemon=True).start()
-    if args.overlay or args.overlay_edit:
-        import overlay
-        try:
-            overlay.run(bus, stop, edit=args.overlay_edit)
-        except Exception as exc:
-            print("Overlay failed (%s). Voice coach still running. Ctrl+C to quit." % exc, flush=True)
+    try:
+        if args.web:
+            import web_dash
+            threading.Thread(target=web_dash.serve, args=(bus, stop), daemon=True).start()
+        if args.overlay or args.overlay_edit:
+            import overlay
+            # Tk swallows KeyboardInterrupt inside its callbacks. Turn Ctrl+C into a clean stop instead.
+            try:
+                signal.signal(signal.SIGINT, lambda *_args: stop.set())
+            except (ValueError, OSError):
+                pass
+            try:
+                overlay.run(bus, stop, edit=args.overlay_edit)
+            except Exception as exc:
+                print("Overlay failed (%s). Voice coach still running. Ctrl+C to quit." % exc, flush=True)
+                while not stop.is_set():
+                    time.sleep(0.5)
+        else:
             while not stop.is_set():
-                time.sleep(0.5)
-    else:
-        while not stop.is_set():
-            time.sleep(0.2)
+                time.sleep(0.2)
+    except KeyboardInterrupt:
+        print("\nCoach signing off.", flush=True)
+    finally:
+        # Let the poll thread write the match note and close the capture before exit.
+        stop.set()
+        worker.join(5)
 
 
 if __name__ == "__main__":

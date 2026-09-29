@@ -151,11 +151,20 @@ def has_grievous(owned, catalog):
     return False
 
 
+BOOT_WORDS = ("Boots", "Greaves", "Treads", "Steelcaps", "Shoes")
+
+
+def is_boots_record(rec):
+    name = rec.get("name") or ""
+    return "Boots" in (rec.get("tags") or []) or any(word in name for word in BOOT_WORDS)
+
+
 def has_boots(owned, catalog):
+    """Upgraded boots (anything past the 300g Boots). Gunmetal Greaves has no Boots tag, so names count too."""
     for item_id in owned:
-        rec = record(catalog, item_id)
-        tags = rec.get("tags") or []
-        if "Boots" in tags and (rec.get("gold") or 0) >= 1100:
+        if int(item_id) == 1001:
+            continue
+        if is_boots_record(record(catalog, item_id)):
             return True
     return False
 
@@ -278,6 +287,23 @@ def held_completed(player, catalog):
     return found
 
 
+def core_items(role, tags):
+    """First legendaries by class. Only names that exist on the current patch survive step()."""
+    if role == "adc":
+        return ["Yun Tal Wildarrows", "Infinity Edge", "Navori Flickerblade"]
+    if role == "mage":
+        if "Fighter" in tags or "Tank" in tags:
+            return ["Liandry's Torment", "Riftmaker"]
+        if "Assassin" in tags:
+            return ["Hextech Rocketbelt", "Shadowflame"]
+        if "Support" in tags:
+            return ["Malignance", "Liandry's Torment"]
+        return ["Malignance", "Shadowflame"]
+    if role == "fighter":
+        return ["Sterak's Gage"] if "Tank" in tags else []
+    return []
+
+
 def slot_names(ctx):
     names = []
 
@@ -303,6 +329,11 @@ def slot_names(ctx):
             add("Morellonomicon")
         if ctx["mr"] >= 2:
             add("Void Staff")
+        # Defensive picks come after the first core item; a mage with no damage item
+        # gains nothing from buying Banshee's first.
+        cores = core_items(role, ctx.get("tags") or [])
+        if cores and not ctx.get("has_core"):
+            add(cores[0])
         if ctx["ad"] >= 3 or ctx["deaths"] >= 3:
             add("Zhonya's Hourglass")
         if ctx["ap"] >= 3:
@@ -319,10 +350,7 @@ def slot_names(ctx):
             add("Morellonomicon")
     if not ctx["has_boots"] and (ctx["ad"] >= 4 or ctx["ap"] >= 4):
         add(boots_name(role, ctx["ad"], ctx["ap"]))
-    cores = {
-        "adc": ["Yun Tal Wildarrows", "Infinity Edge", "Navori Flickerblade"],
-    }
-    for name in cores.get(role, []):
+    for name in core_items(role, ctx.get("tags") or []):
         add(name)
     if not ctx["has_boots"]:
         add(boots_name(role, ctx["ad"], ctx["ap"]))
@@ -354,6 +382,19 @@ def click_for(finished_name, owned, catalog, note):
     return finished
 
 
+def spoken_reason(note, ad=0, ap=0, name=""):
+    if note == "heal":
+        return "for their healing"
+    if note == "pen":
+        magic = any(word in name for word in ("Void", "Blighting", "Cryptbloom"))
+        return "for their magic resist" if magic else "for their armor"
+    if note == "shield":
+        return "for their shields"
+    if note == "boots":
+        return "for their %s damage" % ("physical" if ad >= ap else "magic")
+    return "next item"
+
+
 def advise(me, enemies, gold, catalog, game_time=0, allies=None, deaths=0):
     """Return a shop card. lines are overlay text. speak is None or one sentence."""
     empty = {"why": "", "lines": [], "speak": None, "key": None}
@@ -375,7 +416,10 @@ def advise(me, enemies, gold, catalog, game_time=0, allies=None, deaths=0):
         mr += int(flags[3])
     ad = me.get("_ad", 0)
     ap = me.get("_ap", 0)
-    current_has_boots = has_boots(owned, catalog) or quest_slot_boots(pos, me.get("_move_speed"))
+    if me.get("_has_boots") is not None:
+        current_has_boots = bool(me.get("_has_boots")) or has_boots(owned, catalog)
+    else:
+        current_has_boots = has_boots(owned, catalog) or quest_slot_boots(pos, me.get("_move_speed"))
 
     reasons = []
     if heal and not (team_cut and crit_carry and style == "ad"):
@@ -409,6 +453,10 @@ def advise(me, enemies, gold, catalog, game_time=0, allies=None, deaths=0):
         "team_cut": team_cut,
         "skip_grievous": skip_grievous,
         "has_boots": current_has_boots,
+        "tags": me.get("_tags") or [],
+        "has_core": bool(held_completed({"items": [i for i in me.get("items") or []
+                                                   if not is_boots_record(record(catalog, i.get("itemID") or 0))]},
+                                        catalog)) if me.get("items") else False,
     }
     notes = {}
     if heal and not skip_grievous:
@@ -449,7 +497,7 @@ def advise(me, enemies, gold, catalog, game_time=0, allies=None, deaths=0):
             key = action["id"]
             urgent = action["note"] in ("heal", "pen", "shield", "boots")
             if afford and game_time >= 80 and urgent:
-                speak = "Shop. %s, %d gold. %s." % (action["name"], action["cost"], why)
+                speak = "Shop. %s, %d gold, %s." % (action["name"], action["cost"], spoken_reason(action["note"], ad, ap, action["name"]))
             if action.get("into_name") and action["into_name"] not in (action["name"],):
                 lines.append("THEN %s" % action["into_name"])
         for name in resolved[1:5]:

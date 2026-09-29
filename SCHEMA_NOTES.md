@@ -1,46 +1,57 @@
-# Schema notes
+# Live Client schema notes
 
-Status: **unverified against a live match**. Do not treat these field names as confirmed until a `--capture` folder exists.
+Status: **verified against 18 real matches** (captures from 2026-09-26/27, patch 16.19, NA, ranked + bot games).
+Anonymized samples live in `tests/fixtures/real/` and replay through the coach in `tests/test_real_games.py`.
 
-Checked 2026-09-26. Port 2999 was not read.
+## Objective clock (confirmed by real kill times)
 
-## Timers shipped in CONFIG
+| Objective | Config | Evidence (earliest real kill) |
+|---|---|---|
+| Dragon | first 5:00, respawn 5:00 | 5:54 |
+| Dragon soul | first team to 4 dragons | 4 of 9 full games had a 2–2 or 1–3 split at the 4th dragon; soul came later |
+| Elder | 6:00 after soul, 6:00 respawn | `DragonType: "Elder"` seen 4 times |
+| Void grubs | 8:00, one camp of 3, despawn 14:45 | 8:08; always exactly 3 `HordeKill` events per game |
+| Herald | 15:00, despawn 19:45 | 15:35 |
+| Baron | 20:00, respawn 6:00 | 21:02 |
 
-| Objective | Value | Source | Confidence |
-|---|---|---|---|
-| Dragon first / respawn | 5:00 / 5:00 | Dragon pit wiki; patch 26.1 said epic spawns other than Baron were unchanged | High |
-| Elder | 6:00 after the 4th dragon kill | Dragon pit wiki | Medium, confirm on capture |
-| Void grubs | 8:00, despawn 14:45 if untouched | Voidgrub camp wiki, updated 2026-09-23 | Medium. Baron pit wiki still says 6:00; treated as stale |
-| Herald | 15:00, despawn 19:45 if untouched | Baron pit wiki + nerfplz Season 16 guide | Medium |
-| Baron | 20:00 first, 6:00 respawn | Patch 26.1 notes (`25m => 20m`). Patch 26.19 notes (2026-09-22) do not change it | High |
+No Atakhan events appeared (removed in 26.1).
 
-Atakhan was removed in patch 26.1. No handler until a capture shows an event name.
+## `activePlayer`
 
-## Assumed live JSON fields
+`summonerName` is now `Name#TAG`. Also `riotId` (`Name#TAG`), `riotIdGameName`, `riotIdTagLine` (capital **L**), `currentGold`, `level`, `championStats` (incl. `moveSpeed`), `abilities`, `fullRunes`, `teamRelativeColors`.
 
-These match the public Live Client Data shape and the original script. They are still assumptions.
+## `allPlayers[]`
 
-- Identity: `summonerName`, `riotIdGameName`, `riotId`, `riotIdTagline` / `tagLine`. `#TAG` is stripped. `--me YourName` is the fallback if matching fails.
-- Role: `position` of `TOP / JUNGLE / MIDDLE / BOTTOM / UTILITY`. Aliases `MID`, `BOT`, `ADC`, `SUPPORT` are accepted. Support CS checks are skipped only for `UTILITY` after aliasing.
-- Champion: `championName`, `rawChampionName`.
-- Combat: `isDead`, `respawnTimer`, `level`, `scores.creepScore`.
-- Items: `items[].itemID`, `displayName`, `price`, `count`, `consumable`.
-- Teams: compared as opaque strings (`ORDER` / `CHAOS` in the demo). Not hardcoded to blue/red.
-- Events: `events.Events[]` with `EventID`, `EventName`, `EventTime`. Assumed cumulative for late-join sync. If a capture shows a sliding window, late-join objective state will be wrong until the next kill event.
-- `Stolen`: accepted as boolean `true` or string `"True"`.
+`championName`, `rawChampionName` (`game_character_displayname_X`), `position` (`TOP/JUNGLE/MIDDLE/BOTTOM/UTILITY`), `team` (`ORDER/CHAOS`), `riotId`, `riotIdGameName`, `riotIdTagLine`, `summonerName`, `isBot`, `isDead`, `respawnTimer`, `level`, `scores`, `items[]`, `runes`, `summonerSpells`, `skinID`, `skinName`, `rawSkinName`.
 
-## Event names the code handles
+`items[]`: `itemID`, `displayName`, `count`, `consumable`, `canUse`, `slot`, `rawDescription`, `rawDisplayName`, `price`.
 
-`DragonKill`, `BaronKill`, `HeraldKill`, `HordeKill`, `VoidGrubKill`, `ChampionKill`, `Ace`, `InhibKilled`, `GameEnd`.
+- **`price` is the combine cost, not the item's value** (Trinity Force = 133). Item gold must come from Data Dragon.
+- **Bot lane role quest:** finished boots leave `items[]` (Kai'Sa had Berserker's Greaves in slot 2 at 12:01; gone at 20:03). Boots are tracked as "seen once = owned".
+- Gunmetal Greaves (quest upgrade) has **no `Boots` tag** in Data Dragon. Boot detection also checks names.
+- Bots: `KillerName`/`VictimName` use the champion name (e.g. `"Miss Fortune"`).
 
-Anything else is printed once as `[event] Name` and otherwise ignored.
+## `events.Events[]`
 
-## Observed outside a match
+Cumulative from `EventID 0` for the whole match, even when the coach starts at 34:32. Late join rebuilds history from it.
 
-On 2026-09-26 the demo and replay runs reached Data Dragon and loaded item/champion data for `16.19.1`. That is the static-data version string. It is not a live-client capture, and it does not by itself prove the in-game objective clock.
+| Event | Fields seen |
+|---|---|
+| `GameStart`, `MinionsSpawning` | — |
+| `ChampionKill` | `KillerName`, `VictimName`, `Assisters` |
+| `FirstBlood` | `Recipient` |
+| `Multikill` | `KillerName`, `KillStreak` |
+| `DragonKill` | `KillerName`, `Assisters`, `DragonType` (`Fire/Water/Earth/Air/Hextech/Chemtech/Elder`), `Stolen` (**string** `"True"/"False"`) |
+| `HordeKill` | one per grub, `KillerName`, `Assisters`, `Stolen` |
+| `HeraldKill`, `BaronKill` | `KillerName`, `Assisters`, `Stolen` |
+| `TurretKilled`, `FirstBrick` | `TurretKilled` (e.g. `Turret_TChaos_L1_P3_…`), `KillerName` |
+| `InhibKilled`, `InhibRespawned` | `InhibKilled` (e.g. `Inhib_TOrder_L1_P1_…` = ORDER's inhibitor) |
+| `Ace` | `Acer`, `AcingTeam` |
+| `GameEnd` | **`Result`: `"Win"` / `"Lose"`** |
 
-## Event names seen in a real match
+`KillerName` can be a raw ID: `Turret_TOrder_L2_P3_1509986696`, `SRU_*`, minions. The coach reads these as "a tower", "minions", "a jungle camp".
 
-None yet.
+## API behavior
 
-Simulated demo only, not a live client: `GameStart`, `DragonKill`, `ChampionKill`, `HordeKill`, `HeraldKill`, `Ace`, `BaronKill`.
+- The endpoint occasionally fails a single poll mid-game (one real game was split into three captures by this). The coach waits `disconnect_grace` (15 s) before calling a game closed, and resumes the same match after longer outages.
+- A late-game frame is ~50 KB raw. Captures are now written gzipped (`NNNN.json.gz`, ~7 KB, about 1/7 the disk).

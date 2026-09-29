@@ -8,7 +8,9 @@ use RegisterHotKey, not a low-level keyboard hook.
 import ctypes
 import json
 import os
+import queue
 import sys
+import threading
 import time
 from ctypes import wintypes
 
@@ -57,12 +59,40 @@ TRACK = "#1e2a3d"
 WARN_BG = "#091522"
 LINE = "#17324a"
 
-user32 = ctypes.windll.user32
+user32 = ctypes.windll.user32 if sys.platform.startswith("win") else None
+
+SM_CXSCREEN, SM_CYSCREEN = 0, 1
+SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN = 76, 77, 78, 79
 
 
 def screen_key():
-    height = user32.GetSystemMetrics(1) if sys.platform.startswith("win") else 1080
+    height = user32.GetSystemMetrics(SM_CYSCREEN) if user32 else 1080
     return "1440p" if height >= 1400 else "1080p"
+
+
+def screen_bounds():
+    """(primary_w, primary_h, virtual_x, virtual_y, virtual_w, virtual_h). Virtual = all monitors."""
+    if not user32:
+        return 1920, 1080, 0, 0, 1920, 1080
+    metric = user32.GetSystemMetrics
+    return (metric(SM_CXSCREEN), metric(SM_CYSCREEN), metric(SM_XVIRTUALSCREEN),
+            metric(SM_YVIRTUALSCREEN), metric(SM_CXVIRTUALSCREEN), metric(SM_CYVIRTUALSCREEN))
+
+
+def place(layout, width, height, bounds=None):
+    """Where the card goes. Auto = top-right of the primary monitor. A saved spot that is no
+    longer on any monitor (unplugged screen, a friend's single display) snaps back to auto."""
+    prim_w, prim_h, vx, vy, vw, vh = bounds or screen_bounds()
+    auto_x = max(0, prim_w - width - 24)
+    auto_y = min(140, max(0, prim_h - height))
+    x, y = layout.get("x"), layout.get("y")
+    if x is None:
+        return auto_x, min(max(0, int(y if y is not None else 140)), max(0, prim_h - 120))
+    if y is None:
+        y = 140
+    x, y = int(x), int(y)
+    visible = vx - width + 80 <= x <= vx + vw - 80 and vy <= y <= vy + vh - 60
+    return (x, y) if visible else (auto_x, auto_y)
 
 
 def layout_path():
@@ -129,6 +159,46 @@ def apply_exstyle(hwnd, click_through):
     return user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
 
 
+def start_hotkeys(events, stop):
+    """Global hotkeys on their own thread with its own message queue.
+
+    RegisterHotKey(NULL, ...) posts WM_HOTKEY to the registering thread's queue. Tk's
+    event loop on the UI thread pulls and discards thread messages, so presses could
+    be lost there. A dedicated thread owns the hotkeys and hands presses to Tk
+    through a queue. Still RegisterHotKey only, no keyboard hook.
+    """
+    if not user32:
+        return None
+
+    def run():
+        msg = wintypes.MSG()
+        # Any user32 message call creates this thread's message queue before registering.
+        user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, 0)
+        mods = MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT
+        ids = []
+        if user32.RegisterHotKey(None, HOTKEY_HIDE_ID, mods, VK_O):
+            ids.append(HOTKEY_HIDE_ID)
+        else:
+            print("Overlay hotkey Ctrl+Shift+O is already taken. Overlay still shows.", flush=True)
+        if user32.RegisterHotKey(None, HOTKEY_MOVE_ID, mods, VK_M):
+            ids.append(HOTKEY_MOVE_ID)
+        else:
+            print("Overlay move hotkey Ctrl+Shift+M is already taken. Use --overlay-edit to move.", flush=True)
+        try:
+            while not stop.is_set():
+                if user32.PeekMessageW(ctypes.byref(msg), None, WM_HOTKEY, WM_HOTKEY, PM_REMOVE):
+                    events.put(int(msg.wParam))
+                else:
+                    time.sleep(0.03)
+        finally:
+            for hotkey in ids:
+                user32.UnregisterHotKey(None, hotkey)
+
+    thread = threading.Thread(target=run, name="overlay-hotkeys", daemon=True)
+    thread.start()
+    return thread
+
+
 def timer_style(remain):
     if remain is None:
         return "--", MUTED
@@ -168,7 +238,11 @@ def next_objective(state):
             best = row
     _rank, key, remain = best
     text, color = timer_style(remain)
-    return names.get(key, key.upper()), text, remain, color
+    label = names.get(key, key.upper())
+    dragons = state.get("dragons") or {}
+    if key == "dragon" and not state.get("elder") and (dragons.get("us") or dragons.get("them")):
+        label = "%s %d-%d" % (label, dragons.get("us", 0), dragons.get("them", 0))
+    return label, text, remain, color
 
 
 def split_shop(lines):
@@ -227,7 +301,8 @@ def run(bus, stop, edit=False):
     root.title("Macro Goblin")
     root.overrideredirect(True)
     root.attributes("-topmost", True)
-    root.geometry("%dx%d+%d+%d" % (width, height, layout["x"], layout["y"]))
+    pos_x, pos_y = place(layout, width, height)
+    root.geometry("%dx%d+%d+%d" % (width, height, pos_x, pos_y))
     root.configure(bg=TRANSPARENT)
     if not edit:
         try:
@@ -405,20 +480,32 @@ def run(bus, stop, edit=False):
             root.after(50, apply_style)
 
     def poll_hotkey():
-        if sys.platform.startswith("win"):
-            msg = wintypes.MSG()
-            while user32.PeekMessageW(ctypes.byref(msg), None, WM_HOTKEY, WM_HOTKEY, PM_REMOVE):
-                hotkey_id = getattr(msg, "wParam", 0)
+        try:
+            while True:
+                try:
+                    hotkey_id = hotkey_events.get_nowait()
+                except queue.Empty:
+                    break
                 if hotkey_id == HOTKEY_MOVE_ID:
                     toggle_move_mode()
                 else:
                     hide_show()
-        if stop.is_set():
-            root.destroy()
-            return
-        root.after(50, poll_hotkey)
+        finally:
+            if stop.is_set():
+                root.destroy()
+            else:
+                root.after(50, poll_hotkey)
 
     def refresh():
+        try:
+            draw()
+        except Exception as exc:  # one bad frame must not freeze the overlay
+            print("Overlay draw error: %s" % exc, flush=True)
+        finally:
+            if not stop.is_set():
+                root.after(100, refresh)
+
+    def draw():
         state = bus.snapshot()
         in_game = bool(state.get("in_game"))
         ticks["n"] += 1
@@ -473,7 +560,10 @@ def run(bus, stop, edit=False):
         else:
             diff = state.get("gold_diff", 0) or 0
             prev = state.get("prev_gold_diff", diff) or 0
-            gold_label.configure(text="Gold %s" % gold_text(diff, prev), fg=UP if diff >= 0 else DOWN)
+            if state.get("gold_ok") is False:
+                gold_label.configure(text="Gold -- (offline)", fg=MUTED)
+            else:
+                gold_label.configure(text="Gold %s" % gold_text(diff, prev), fg=UP if diff >= 0 else DOWN)
             bar_w = max(10, width - 36)
             mid = bar_w / 2
             gold_canvas.create_rectangle(0, 2, bar_w, int(9 * scale), fill=TRACK, outline="")
@@ -514,7 +604,6 @@ def run(bus, stop, edit=False):
         if ticks["n"] % 20 == 0 and not hidden["value"]:
             root.attributes("-topmost", True)
             apply_style()
-        root.after(100, refresh)
 
     def start_drag(event):
         if not move_mode["value"]:
@@ -540,21 +629,10 @@ def run(bus, stop, edit=False):
 
     bind_drag(shell)
 
-    hotkeys = []
-    if sys.platform.startswith("win"):
-        if user32.RegisterHotKey(None, HOTKEY_HIDE_ID, MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, VK_O):
-            hotkeys.append(HOTKEY_HIDE_ID)
-        else:
-            print("Overlay hotkey Ctrl+Shift+O is already taken. Overlay still shows.", flush=True)
-        if user32.RegisterHotKey(None, HOTKEY_MOVE_ID, MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, VK_M):
-            hotkeys.append(HOTKEY_MOVE_ID)
-        else:
-            print("Overlay move hotkey Ctrl+Shift+M is already taken. Use --overlay-edit to move.", flush=True)
+    hotkey_events = queue.Queue()
+    start_hotkeys(hotkey_events, stop)
 
     def on_close():
-        if sys.platform.startswith("win"):
-            for hotkey in hotkeys:
-                user32.UnregisterHotKey(None, hotkey)
         stop.set()
         root.destroy()
 
@@ -565,7 +643,4 @@ def run(bus, stop, edit=False):
     try:
         root.mainloop()
     finally:
-        if sys.platform.startswith("win"):
-            for hotkey in hotkeys:
-                user32.UnregisterHotKey(None, hotkey)
         stop.set()

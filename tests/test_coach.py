@@ -26,14 +26,19 @@ BANNED = (
 
 
 class Silent:
+    """Records voiced lines only (priority > 0), like the real speaker."""
+
     def __init__(self):
         self.lines = []
+        self.quiet = []
 
-    def say(self, text):
-        self.lines.append(text)
+    def say(self, text, priority=2, ttl=None):
+        (self.lines if priority > 0 else self.quiet).append(text)
 
 
 class FakeDD:
+    ok = True
+
     def gold(self, item):
         return item.get("price", 0)
 
@@ -134,7 +139,7 @@ class CoachTests(unittest.TestCase):
         self.coach.tick(frame(1200, events=events))
         self.assertTrue(self.coach.elder)
         self.assertEqual(self.coach.spawns["dragon"], 1200 + 360)
-        self.assertTrue(any("Elder next" in line for line in self.voice.lines))
+        self.assertTrue(any("Our soul. Elder at" in line for line in self.voice.lines))
 
     def test_late_join_does_not_replay_old_callouts(self):
         events = [{
@@ -146,7 +151,8 @@ class CoachTests(unittest.TestCase):
             "Stolen": False,
         }]
         self.coach.tick(frame(700, events=events))
-        self.assertFalse(any("dragon" in line.lower() for line in self.voice.lines))
+        self.assertEqual(len(self.voice.lines), 1)
+        self.assertTrue(self.voice.lines[0].startswith("Coach synced at 11:40."))
         self.assertEqual(self.coach.spawns["dragon"], 700)
 
     def test_grubs_leave_at_despawn(self):
@@ -181,8 +187,9 @@ class CoachTests(unittest.TestCase):
             self.assertIsNotNone(cap.maybe_write(first, now=100))
             self.assertIsNone(cap.maybe_write(second, now=102))
             self.assertIsNotNone(cap.maybe_write(third, now=103))
-            files = sorted(name for name in os.listdir(cap.dir) if name.endswith(".json"))
-            self.assertEqual(files, ["0000.json", "0001.json"])
+            files = sorted(name for name in os.listdir(cap.dir) if name.endswith(".json.gz"))
+            self.assertEqual(files, ["0000.json.gz", "0001.json.gz"])
+            self.assertEqual(len(lol_coach.load_frames(cap.dir)), 2)
         finally:
             cap.close()
             shutil.rmtree(tmp)

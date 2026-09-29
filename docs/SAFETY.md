@@ -41,4 +41,4 @@ The dashboard binds only to `127.0.0.1`. The code refuses non-localhost dashboar
 
 ## Local files
 
-`captures/`, `logs/`, and `reports/` are local debugging artifacts. They can contain summoner names and match details. They are ignored by git and should not be shared unless intentionally anonymized.
+`captures/`, `logs/`, `reports/` and `cache/` are local files. They can contain summoner names and match details. They are ignored by git and should not be shared unless intentionally anonymized.

@@ -26,6 +26,7 @@ python lol_coach.py --overlay-edit
 - Hide/show hotkey: `Ctrl+Shift+O`.
 - Move/save hotkey: `Ctrl+Shift+M`, drag the card, then press `Ctrl+Shift+M` again to return to click-through live mode.
 - If using multiple monitors, the saved position is local in `overlay_layout.json`. Delete that file to reset layout.
+- A saved position that is no longer on any screen snaps back to the top-right of the main monitor automatically.
 
 ## No voice
 
@@ -43,9 +44,14 @@ python lol_coach.py --overlay --no-voice
 
 On Windows, voice uses PowerShell/System.Speech. If that fails, the app keeps printing callouts.
 
+## Coach restarted mid-game / went quiet briefly
+
+The live API sometimes fails a single poll (loading screens, heavy fights). The coach waits 15 seconds before it treats the game as over, and if the same match comes back later it picks up where it left off with the same history and the same match note. If you restart the app mid-game, it rebuilds deaths, dragons and grubs from the game's event history and says one "Coach synced" line.
+
 ## Data Dragon warning
 
-If doctor says Riot Data Dragon is not reachable:
+Game data is cached per patch in `cache\`, so after one successful run the coach works offline.
+If doctor says Riot Data Dragon is not reachable on a fresh install:
 
 - Check internet access.
 - Try again later; Data Dragon can be temporarily unavailable.

@@ -1,0 +1,21 @@
+# Line endings: LF in the repo, CRLF for Windows batch files.
+* text=auto eol=lf
+*.bat text eol=crlf
+*.png binary
+*.gz binary
+
+# GitHub's "Download ZIP" skips these, so friends get a ~1 MB app instead of 35 MB of brand art.
+# They stay in the repo (docs/ powers the GitHub Pages site).
+docs/ export-ignore
+.github/ export-ignore
+assets/*concept* export-ignore
+assets/sticker-* export-ignore
+assets/brand-* export-ignore
+assets/social-banner.png export-ignore
+assets/readme-hero*.png export-ignore
+assets/mascot-* export-ignore
+assets/overlay-mockup.png export-ignore
+assets/macro-goblin-logo.png export-ignore
+assets/macro-goblin-icon.png export-ignore
+assets/live-mark-headset-pin.png export-ignore
+assets/app-icon-1024.png export-ignore

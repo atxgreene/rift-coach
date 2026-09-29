@@ -9,6 +9,10 @@ def _recent(deaths, now, window):
     return [row for row in deaths if now - row.get("t", 0) <= window]
 
 
+LEAD_PEAK = 3000
+LEAD_DROP = 2500
+
+
 def scan(state):
     """Return reads in priority order. Each is {key, line}."""
     notes = []
@@ -39,17 +43,22 @@ def scan(state):
     if len(rates) >= 2 and rates[-1] < 5.5 and rates[-2] < 5.5:
         notes.append({
             "key": "cs-stuck",
-            "line": "CS has been under 5 all game. Catch the wave before you fight.",
+            "line": "CS is under 5 and a half a minute. Catch waves before you fight.",
         })
     curve = state.get("gold_curve") or []
-    if len(curve) >= 2:
-        latest = curve[-1][1]
-        prior = [diff for _t, diff in curve[-4:-1]]
-        if prior and max(prior) >= 2500 and latest <= max(prior) - 2000:
-            notes.append({
-                "key": "lead:%d" % int(curve[-1][0] // 60),
-                "line": "That lead just vanished. Reset before the next fight.",
-            })
+    if len(curve) >= 3:
+        # Item gold jumps whenever one team backs and shops, so require the drop to
+        # hold for two samples in a row before calling it a lost lead.
+        latest = max(curve[-1][1], curve[-2][1])
+        prior = curve[-5:-2]
+        if prior:
+            peak_t, peak = max(prior, key=lambda row: row[1])
+            if peak >= state.get("lead_peak", LEAD_PEAK) and latest <= peak - state.get("lead_drop", LEAD_DROP):
+                # Keyed by the peak, so one collapse is called once, not every minute it lasts.
+                notes.append({
+                    "key": "lead:%d" % int(peak_t),
+                    "line": "That lead just slipped. Reset before the next fight.",
+                })
     objectives = state.get("objectives") or []
     ours = [row for row in objectives if row.get("who") == "We" and row.get("name") == "dragon"]
     theirs = [row for row in objectives if row.get("who") == "They" and row.get("name") == "baron"]

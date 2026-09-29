@@ -65,7 +65,9 @@ async function tick() {
   } else {
     who.textContent = state.hint || "Queue up. Borderless.";
   }
-  const names = {dragon: state.elder ? "Elder" : "Dragon", grubs: "Grubs", herald: "Herald", baron: "Baron"};
+  const dr = state.dragons || {};
+  const dragonName = state.elder ? "Elder" : ("Dragon" + ((dr.us || dr.them) ? " " + (dr.us || 0) + "-" + (dr.them || 0) : ""));
+  const names = {dragon: dragonName, grubs: "Grubs", herald: "Herald", baron: "Baron"};
   const rows = Object.keys(names).map(key => {
     const at = (state.spawns || {})[key];
     if (at == null || state.t == null) return "<tr><td class='muted'>" + names[key] + "</td><td class='muted'>--</td></tr>";

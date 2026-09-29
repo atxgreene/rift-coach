@@ -1,0 +1,21 @@
+name: tests
+on:
+  push:
+  pull_request:
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.9", "3.12"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Unit + real-game regression tests
+        run: python -m unittest discover -s tests -p "test_*.py" -v
+      - name: Replay budget
+        run: python tools/replay_eval.py tests/fixtures/real/kaisa-bot-win.jsonl.gz tests/fixtures/real/veigar-mid-loss.jsonl.gz --summary
