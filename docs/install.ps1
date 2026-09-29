@@ -26,8 +26,12 @@
     }
 
     Write-Host '  Downloading the latest release...'
-    Invoke-WebRequest -UseBasicParsing -Uri "$base/MacroGoblin-Setup.exe" -OutFile $setup
-    Invoke-WebRequest -UseBasicParsing -Uri "$base/SHA256SUMS.txt" -OutFile $sums
+    try {
+        Invoke-WebRequest -UseBasicParsing -Uri "$base/MacroGoblin-Setup.exe" -OutFile $setup
+        Invoke-WebRequest -UseBasicParsing -Uri "$base/SHA256SUMS.txt" -OutFile $sums
+    } catch {
+        throw "Couldn't download the installer ($($_.Exception.Message)). Check your connection, or get it from https://github.com/$repo/releases"
+    }
 
     $expected = (Get-Content $sums | Where-Object { $_ -match 'MacroGoblin-Setup\.exe' } | ForEach-Object { ($_ -split '\s+')[0] }) | Select-Object -First 1
     $actual = (Get-FileHash -Algorithm SHA256 $setup).Hash
