@@ -260,8 +260,21 @@ class CompactHud:
         self.place_initial()
 
     # placement
+    def fit_width(self):
+        """Never narrower than the timer row: fonts have a minimum size, small screens do not."""
+        need = self.root.winfo_reqwidth()
+        if need > self.width:
+            if self.right_anchored():
+                self.x -= need - self.width
+            self.width = need
+            self.call.configure(wraplength=self.width - 20)
+
+    def right_anchored(self):
+        return getattr(self, "x", 0) + self.width / 2.0 > self.screen[0] / 2.0
+
     def place_initial(self):
         self.root.update_idletasks()
+        self.width = max(self.width, self.root.winfo_reqwidth())
         height = self.root.winfo_reqheight()
         x, y = self.saved.get("x"), self.saved.get("y")
         screen_w, screen_h = self.screen
@@ -311,6 +324,7 @@ class CompactHud:
             self.call_shown = False
         self.call.configure(text=clip(call, self.chars * 2))
         self.root.update_idletasks()
+        self.fit_width()
         self.apply_geometry(self.root.winfo_reqheight())
 
     def show(self):
